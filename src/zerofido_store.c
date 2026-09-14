@@ -205,6 +205,7 @@ void zf_store_index_entry_from_record(const ZfCredentialRecord *record,
     entry->counter_high_water = record->sign_count;
     entry->created_at = record->created_at;
     entry->cred_protect = zf_ctap_cred_protect_effective(record->cred_protect);
+    entry->storage_version = record->storage_version;
 }
 
 bool zf_store_init_with_buffer(Storage *storage, ZfCredentialStore *store, uint8_t *buffer,
@@ -281,6 +282,8 @@ bool zf_store_prepare_credential(ZfCredentialRecord *record, const char *rp_id,
 bool zf_store_add_record_with_buffer(Storage *storage, ZfCredentialStore *store,
                                      const ZfCredentialRecord *record, uint8_t *buffer,
                                      size_t buffer_size) {
+    ZfCredentialRecord record_to_index;
+
     if (!store || !record || !buffer || buffer_size < ZF_STORE_RECORD_IO_SIZE ||
         store->count >= ZF_MAX_CREDENTIALS) {
         return false;
@@ -292,7 +295,17 @@ bool zf_store_add_record_with_buffer(Storage *storage, ZfCredentialStore *store,
         return false;
     }
 
-    zf_store_index_entry_from_record(record, &store->records[store->count]);
+    /*
+     * record->storage_version only means something once a record has been
+     * decoded from disk -- a freshly built record (as here) never had it
+     * set. This path always writes format version 1, so the index entry
+     * must say so explicitly rather than trusting whatever the caller left
+     * in that field.
+     */
+    record_to_index = *record;
+    record_to_index.storage_version = ZF_STORE_FORMAT_VERSION;
+    zf_store_index_entry_from_record(&record_to_index, &store->records[store->count]);
+    zf_crypto_secure_zero(&record_to_index, sizeof(record_to_index));
     store->count++;
     return true;
 }
@@ -911,3 +924,129 @@ bool zf_store_has_matching_credential_with_buffer(Storage *storage, const ZfCred
     zf_store_rp_matcher_clear(&matcher);
     return false;
 }
+
+#if ZF_VAULT_PIN_KEK
+
+bool zf_store_append_vault_records_with_buffer(Storage *storage, ZfCredentialStore *store,
+                                               const uint8_t vmk[ZF_VAULT_KEY_LEN], uint8_t *buffer,
+                                               size_t buffer_size) {
+    if (!buffer || buffer_size < ZF_STORE_RECORD_IO_SIZE) {
+        return false;
+    }
+    return zf_store_bootstrap_append_vault_records_with_buffer(storage, store, vmk, buffer,
+                                                                buffer_size);
+}
+
+bool zf_store_add_record_with_buffer_vault(Storage *storage, ZfCredentialStore *store,
+                                           const ZfCredentialRecord *record,
+                                           const uint8_t vmk[ZF_VAULT_KEY_LEN], uint8_t *buffer,
+                                           size_t buffer_size) {
+    ZfCredentialRecord record_to_index;
+
+    if (!store || !record || !vmk || !buffer || buffer_size < ZF_STORE_RECORD_IO_SIZE ||
+        store->count >= ZF_MAX_CREDENTIALS) {
+        return false;
+    }
+    if (!zf_store_ensure_capacity(store, store->count + 1U)) {
+        return false;
+    }
+    if (!zf_store_record_format_write_record_with_buffer_vault(storage, record, vmk, buffer,
+                                                                buffer_size)) {
+        return false;
+    }
+
+    /* Same reasoning as zf_store_add_record_with_buffer: this path always
+     * writes format version 2, so say so explicitly in the index entry. */
+    record_to_index = *record;
+    record_to_index.storage_version = ZF_STORE_VAULT_VERSION;
+    zf_store_index_entry_from_record(&record_to_index, &store->records[store->count]);
+    zf_crypto_secure_zero(&record_to_index, sizeof(record_to_index));
+    store->count++;
+    return true;
+}
+
+static bool zf_store_load_record_internal_with_buffer_vault(
+    Storage *storage, const ZfCredentialIndexEntry *entry, const uint8_t vmk[ZF_VAULT_KEY_LEN],
+    ZfCredentialRecord *out_record, uint8_t *buffer, size_t buffer_size) {
+    char file_name[ZF_CREDENTIAL_ID_LEN * 2 + 1];
+
+    if (!entry || !entry->in_use || !vmk || !out_record || !buffer ||
+        buffer_size < ZF_STORE_RECORD_IO_SIZE) {
+        return false;
+    }
+
+    zf_store_index_entry_file_name(entry, file_name);
+    return zf_store_record_format_load_record_with_buffer_vault(storage, file_name, out_record,
+                                                                 vmk, buffer, buffer_size);
+}
+
+bool zf_store_load_record_by_index_with_buffer_vault(Storage *storage,
+                                                      const ZfCredentialStore *store, size_t index,
+                                                      const uint8_t vmk[ZF_VAULT_KEY_LEN],
+                                                      ZfCredentialRecord *out_record,
+                                                      uint8_t *buffer, size_t buffer_size) {
+    if (!store || !store->records || index >= store->count) {
+        return false;
+    }
+    if (!zf_store_load_record_internal_with_buffer_vault(storage, &store->records[index], vmk,
+                                                          out_record, buffer, buffer_size)) {
+        return false;
+    }
+    out_record->sign_count = store->records[index].sign_count;
+    return true;
+}
+
+/*
+ * Mirrors zf_store_update_record_with_buffer (used to persist a signed
+ * counter advance, or here, a display-name edit). Same counter-monotonicity
+ * guard, same index-entry refresh; only the write path differs.
+ */
+bool zf_store_update_record_with_buffer_vault(Storage *storage, ZfCredentialStore *store,
+                                              const ZfCredentialRecord *record,
+                                              const uint8_t vmk[ZF_VAULT_KEY_LEN], uint8_t *buffer,
+                                              size_t buffer_size) {
+    ZfCredentialRecord record_to_write;
+
+    if (!store || !store->records || !record || !vmk || !buffer ||
+        buffer_size < ZF_STORE_RECORD_IO_SIZE) {
+        return false;
+    }
+
+    for (size_t i = 0; i < store->count; ++i) {
+        if (!store->records[i].in_use) {
+            continue;
+        }
+        if (store->records[i].credential_id_len != record->credential_id_len ||
+            memcmp(store->records[i].credential_id, record->credential_id,
+                   record->credential_id_len) != 0) {
+            continue;
+        }
+        uint32_t counter_high_water = store->records[i].counter_high_water;
+        if (record->sign_count < store->records[i].sign_count) {
+            return false;
+        }
+        if (record->sign_count > counter_high_water &&
+            !zf_store_record_format_reserve_counter_with_buffer(storage, record, buffer,
+                                                                buffer_size, &counter_high_water)) {
+            return false;
+        }
+        record_to_write = *record;
+        if (counter_high_water > record_to_write.sign_count) {
+            record_to_write.sign_count = counter_high_water;
+        }
+        if (!zf_store_record_format_write_record_with_buffer_vault(storage, &record_to_write, vmk,
+                                                                    buffer, buffer_size)) {
+            zf_crypto_secure_zero(&record_to_write, sizeof(record_to_write));
+            return false;
+        }
+        zf_crypto_secure_zero(&record_to_write, sizeof(record_to_write));
+
+        zf_store_index_entry_from_record(record, &store->records[i]);
+        store->records[i].counter_high_water = counter_high_water;
+        return true;
+    }
+
+    return false;
+}
+
+#endif

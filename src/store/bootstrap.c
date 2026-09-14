@@ -25,6 +25,9 @@
 #include "internal.h"
 #include "record_format.h"
 #include "recovery.h"
+#if ZF_VAULT_PIN_KEK
+#include "../vault/zf_vault_key.h"
+#endif
 
 /* Creates the shared application data directories used by store, PIN, and U2F. */
 bool zf_store_bootstrap_ensure_app_data_dir(Storage *storage) {
@@ -146,3 +149,110 @@ bool zf_store_bootstrap_wipe_app_data(Storage *storage) {
     return zf_storage_for_each_dir_entry(storage, ZF_APP_DATA_DIR, name, sizeof(name),
                                          zf_store_bootstrap_wipe_visitor, &context);
 }
+
+
+#if ZF_VAULT_PIN_KEK
+
+typedef struct {
+    Storage *storage;
+    ZfCredentialStore *store;
+    const uint8_t *vmk;
+    uint8_t *buffer;
+    size_t buffer_size;
+} ZfStoreBootstrapAppendVaultContext;
+
+/* File names are the lowercase-hex credential ID; decode back to bytes to
+ * check identity against the store, independent of which pass (v1 or a
+ * previous vault append) already indexed it. */
+static bool zf_store_bootstrap_hex_nibble(char c, uint8_t *out) {
+    if (c >= '0' && c <= '9') {
+        *out = (uint8_t)(c - '0');
+        return true;
+    }
+    if (c >= 'a' && c <= 'f') {
+        *out = (uint8_t)(c - 'a' + 10);
+        return true;
+    }
+    if (c >= 'A' && c <= 'F') {
+        *out = (uint8_t)(c - 'A' + 10);
+        return true;
+    }
+    return false;
+}
+
+static bool zf_store_bootstrap_hex_decode_credential_id(const char *name, uint8_t *out,
+                                                         size_t out_len) {
+    uint8_t hi = 0;
+    uint8_t lo = 0;
+
+    if (strlen(name) < out_len * 2U) {
+        return false;
+    }
+    for (size_t i = 0; i < out_len; ++i) {
+        if (!zf_store_bootstrap_hex_nibble(name[i * 2U], &hi) ||
+            !zf_store_bootstrap_hex_nibble(name[i * 2U + 1U], &lo)) {
+            return false;
+        }
+        out[i] = (uint8_t)((hi << 4) | lo);
+    }
+    return true;
+}
+
+static bool zf_store_bootstrap_append_vault_visitor(const char *name, const FileInfo *info,
+                                                     void *context) {
+    ZfStoreBootstrapAppendVaultContext *ctx = context;
+    uint8_t credential_id[ZF_CREDENTIAL_ID_LEN];
+
+    if (!name || !info || !ctx || !ctx->store) {
+        return false;
+    }
+    if (file_info_is_dir(info) || !zf_store_record_format_is_record_name(name)) {
+        return true;
+    }
+    if (ctx->store->count >= ZF_MAX_CREDENTIALS) {
+        return true;
+    }
+    /*
+     * Already indexed -- by the v1 pass, or by an earlier call to this same
+     * function -- skip. Identity is checked by credential ID rather than by
+     * re-attempting a v1 load, so repeated calls stay idempotent.
+     */
+    if (zf_store_bootstrap_hex_decode_credential_id(name, credential_id, sizeof(credential_id)) &&
+        zf_store_find_index_by_id(ctx->store, credential_id, sizeof(credential_id), NULL)) {
+        return true;
+    }
+    if (!zf_store_ensure_capacity(ctx->store, ctx->store->count + 1U)) {
+        return false;
+    }
+    if (zf_store_record_format_load_index_with_buffer_vault(
+            ctx->storage, name, &ctx->store->records[ctx->store->count], ctx->vmk, ctx->buffer,
+            ctx->buffer_size)) {
+        ctx->store->count++;
+    }
+    return true;
+}
+
+bool zf_store_bootstrap_append_vault_records_with_buffer(Storage *storage, ZfCredentialStore *store,
+                                                         const uint8_t vmk[ZF_VAULT_KEY_LEN],
+                                                         uint8_t *buffer, size_t buffer_size) {
+    char name[96];
+    ZfStoreBootstrapAppendVaultContext context = {
+        .storage = storage,
+        .store = store,
+        .vmk = vmk,
+        .buffer = buffer,
+        .buffer_size = buffer_size,
+    };
+    bool ok;
+
+    if (!storage || !store || !vmk || !buffer || buffer_size < ZF_STORE_RECORD_MAX_SIZE) {
+        return false;
+    }
+
+    ok = zf_storage_for_each_dir_entry(storage, ZF_APP_DATA_DIR, name, sizeof(name),
+                                       zf_store_bootstrap_append_vault_visitor, &context);
+    zf_crypto_secure_zero(buffer, buffer_size);
+    return ok;
+}
+
+#endif

@@ -43,9 +43,6 @@
  */
 
 #define ZF_STORE_VERSION ZF_STORE_FORMAT_VERSION
-#if ZF_VAULT_PIN_KEK
-#define ZF_STORE_VAULT_VERSION 2U
-#endif
 #define ZF_COUNTER_FLOOR_MAGIC 0x53434632UL
 #define ZF_COUNTER_FLOOR_VERSION 1U
 
@@ -1290,6 +1287,50 @@ bool zf_store_record_format_load_record_with_buffer_vault(Storage *storage, cons
                                          has_embedded_counter_floor, NULL);
     zf_crypto_secure_zero(&embedded_counter_floor, sizeof(embedded_counter_floor));
     return ok;
+}
+
+/*
+ * Index-only counterpart to zf_store_record_format_load_record_with_buffer_vault,
+ * mirroring the v1 index loader exactly except for the decode call. Used to
+ * pick up v2 records the v1-only index pass can't see -- not to migrate
+ * anything, just to read what's already there.
+ */
+bool zf_store_record_format_load_index_with_buffer_vault(Storage *storage, const char *file_name,
+                                                         ZfCredentialIndexEntry *entry,
+                                                         const uint8_t vmk[ZF_VAULT_KEY_LEN],
+                                                         uint8_t *buffer, size_t buffer_size) {
+    char path[128];
+    size_t size = 0;
+    ZfCounterFloorFile embedded_counter_floor;
+    bool has_embedded_counter_floor = false;
+    ZfCredentialRecord record = {0};
+    uint32_t counter_high_water = 0;
+
+    if (!file_name || !entry || !vmk || !buffer || buffer_size == 0) {
+        return false;
+    }
+    zf_store_build_record_path(file_name, path, sizeof(path));
+    if (!zf_storage_read_file(storage, path, buffer, buffer_size, &size)) {
+        return false;
+    }
+
+    if (!zf_record_decode_vault(buffer, size, file_name, vmk, &record, &embedded_counter_floor,
+                                &has_embedded_counter_floor)) {
+        zf_crypto_secure_zero(buffer, size);
+        return false;
+    }
+    zf_crypto_secure_zero(buffer, size);
+    zf_store_index_entry_from_record(&record, entry);
+    zf_crypto_secure_zero(&record, sizeof(record));
+
+    if (!zf_store_counter_floor_validate_index(storage, file_name, entry, &embedded_counter_floor,
+                                               has_embedded_counter_floor, &counter_high_water)) {
+        zf_crypto_secure_zero(&embedded_counter_floor, sizeof(embedded_counter_floor));
+        return false;
+    }
+    zf_crypto_secure_zero(&embedded_counter_floor, sizeof(embedded_counter_floor));
+    entry->counter_high_water = counter_high_water;
+    return true;
 }
 
 #endif

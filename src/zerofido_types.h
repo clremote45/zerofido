@@ -234,6 +234,7 @@ typedef struct {
     uint32_t counter_high_water;
     uint32_t created_at;
     uint8_t cred_protect;
+    uint32_t storage_version;
 } ZfCredentialIndexEntry;
 
 typedef struct {

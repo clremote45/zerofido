@@ -139,3 +139,32 @@ bool zf_store_has_matching_credential_with_buffer(Storage *storage, const ZfCred
                                                   const char *rp_id, ZfStoreCredentialFilter filter,
                                                   const void *filter_context, uint8_t *buffer,
                                                   size_t buffer_size);
+
+#if ZF_VAULT_PIN_KEK
+#include "vault/zf_vault_key.h"
+
+/*
+ * Vault-aware counterparts used when the vault is unlocked: creating a new
+ * credential under the vault key, reading one back (for signing or for
+ * editing its display name), rewriting one after an edit, and folding v2
+ * entries the v1-only boot scan couldn't see into an already-built index.
+ * Which path a given credential needs is fixed at creation time --
+ * ZfCredentialIndexEntry.storage_version says which.
+ */
+bool zf_store_append_vault_records_with_buffer(Storage *storage, ZfCredentialStore *store,
+                                               const uint8_t vmk[ZF_VAULT_KEY_LEN], uint8_t *buffer,
+                                               size_t buffer_size);
+bool zf_store_add_record_with_buffer_vault(Storage *storage, ZfCredentialStore *store,
+                                           const ZfCredentialRecord *record,
+                                           const uint8_t vmk[ZF_VAULT_KEY_LEN], uint8_t *buffer,
+                                           size_t buffer_size);
+bool zf_store_load_record_by_index_with_buffer_vault(Storage *storage,
+                                                      const ZfCredentialStore *store, size_t index,
+                                                      const uint8_t vmk[ZF_VAULT_KEY_LEN],
+                                                      ZfCredentialRecord *out_record,
+                                                      uint8_t *buffer, size_t buffer_size);
+bool zf_store_update_record_with_buffer_vault(Storage *storage, ZfCredentialStore *store,
+                                              const ZfCredentialRecord *record,
+                                              const uint8_t vmk[ZF_VAULT_KEY_LEN], uint8_t *buffer,
+                                              size_t buffer_size);
+#endif
