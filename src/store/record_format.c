@@ -385,10 +385,10 @@ bool zf_store_record_format_reserve_counter(Storage *storage, const ZfCredential
 }
 
 #if ZF_VAULT_PIN_KEK
-static bool zf_record_vault_wrap_private(const uint8_t *vmk,
+static bool zf_record_vault_wrap_private(const uint8_t vmk[ZF_VAULT_KEY_LEN],
                                          uint8_t private_wrapped[ZF_PRIVATE_KEY_LEN],
                                          uint8_t private_vmk_iv[ZF_WRAP_IV_LEN]);
-static bool zf_record_vault_unwrap_private(const uint8_t *vmk,
+static bool zf_record_vault_unwrap_private(const uint8_t vmk[ZF_VAULT_KEY_LEN],
                                            uint8_t private_wrapped[ZF_PRIVATE_KEY_LEN],
                                            const uint8_t private_vmk_iv[ZF_WRAP_IV_LEN]);
 #endif
