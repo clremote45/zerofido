@@ -53,6 +53,9 @@ def main() -> None:
             str(ROOT / "src" / "crypto"),
             str(NATIVE_CRYPTO_SOURCE),
             str(ROOT / "src" / "crypto" / "aes256.c"),
+            str(ROOT / "src" / "crypto" / "sha256.c"),
+            str(ROOT / "src" / "crypto" / "hmac_sha256.c"),
+            str(ROOT / "src" / "crypto" / "pbkdf2.c"),
             "-o",
             str(NATIVE_CRYPTO_BINARY),
         ]
