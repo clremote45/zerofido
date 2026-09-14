@@ -36,6 +36,9 @@
 #include "../zerofido_ui.h"
 #include "../zerofido_ui_i.h"
 #include "../zerofido_usb_diagnostics.h"
+#if ZF_VAULT_PIN_KEK
+#include "../vault/zf_vault_session.h"
+#endif
 
 typedef enum {
     ZfStorageInitOk = 0,
@@ -516,6 +519,9 @@ void zf_app_lifecycle_shutdown(ZerofidoApp *app) {
     furi_mutex_release(app->ui_mutex);
     zf_app_lifecycle_wait_startup(app);
     zf_app_lifecycle_stop_worker(app);
+#if ZF_VAULT_PIN_KEK
+    zf_vault_session_shutdown();
+#endif
 }
 
 void zf_app_lifecycle_free(ZerofidoApp *app) {
