@@ -86,8 +86,23 @@
 #define ZF_STORE_FORMAT_VERSION 1U
 #if ZF_VAULT_PIN_KEK
 #define ZF_STORE_VAULT_VERSION 2U
-/* TODO: needs an on-device PBKDF2 benchmark; conservative placeholder for now. */
-#define ZF_VAULT_PBKDF2_ITERATIONS 50000U
+/*
+ * Estimated, not measured on hardware: the application core is an
+ * STM32WB55 Cortex-M4 at 64MHz with no SHA-256 acceleration (its crypto
+ * engine only speeds up AES), so this runs as plain software. Portable
+ * C SHA-256 on Cortex-M4 typically runs ~4000-5000 cycles per hash call
+ * in published embedded benchmarks; one PBKDF2 iteration is one
+ * HMAC-SHA256 call (inner+outer), so roughly 8000-10000 cycles/iteration,
+ * ~6500-8000 iterations/sec at 64MHz. 10000 iterations is also NIST SP
+ * 800-63B's stated floor for PBKDF2-HMAC-SHA256, and lands at an
+ * estimated ~1.3-1.5s unlock delay -- deliberately the low/fast end
+ * rather than maximum resistance, since the real defense against an
+ * offline attacker (someone with just the SD card) is the enclave
+ * device-binding layer this gets wrapped in, not this count alone.
+ * TODO: confirm against a real on-device timing once hardware is
+ * available, and adjust if the actual unlock delay feels off.
+ */
+#define ZF_VAULT_PBKDF2_ITERATIONS 10000U
 #endif
 #define ZF_MAX_RP_ID_LEN 256
 #define ZF_MAX_USER_ID_LEN 64
