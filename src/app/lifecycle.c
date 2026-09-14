@@ -426,6 +426,23 @@ bool zf_app_lifecycle_startup_pending(ZerofidoApp *app) {
         completed_ok = app->startup_ok;
         start_transport = completed_ok && app->running && !app->worker_thread &&
                           (app->capabilities.fido2_enabled || app->capabilities.u2f_enabled);
+#if ZF_VAULT_PIN_KEK
+        /*
+         * A configured-but-locked vault holds transport off at boot, so no
+         * CTAP request can arrive before the vault is unlocked. Not required
+         * for correctness -- a locked vault already makes v2 credentials
+         * fail to load cleanly (see get_assertion.c) -- but it means a
+         * request never reaches that point at all while locked. Once
+         * unlocked, zerofido_pin_input_result_callback's
+         * ZfPinInputVaultUnlock case calls zf_app_lifecycle_restart_transport
+         * to start it; this flag only ever suppresses the very first
+         * automatic start, never a later one.
+         */
+        if (start_transport && zf_vault_session_is_configured(app->storage) &&
+            !zf_vault_session_is_unlocked()) {
+            start_transport = false;
+        }
+#endif
     } else {
         pending = app->startup_thread != NULL;
     }

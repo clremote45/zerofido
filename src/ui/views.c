@@ -1230,6 +1230,15 @@ static void zerofido_pin_input_result_callback(void *context) {
                 }
                 zf_crypto_secure_zero(vault_vmk, sizeof(vault_vmk));
             }
+            /*
+             * Transport was held off at boot (see zf_app_lifecycle_startup_pending)
+             * specifically because the vault was locked; start it now. If the
+             * background startup thread hasn't finished yet, this is a no-op
+             * (it refuses to run concurrently with it) and transport simply
+             * won't come up automatically this one time -- rare in practice,
+             * since startup is lightweight and typing a PIN takes longer.
+             */
+            zf_app_lifecycle_restart_transport(app);
             zerofido_notify_success(app);
             zerofido_ui_set_status(app, NULL);
         } else {
