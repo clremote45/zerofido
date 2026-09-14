@@ -30,3 +30,9 @@ void zerofido_ui_switch_to_view(ZerofidoApp *app, ZfViewId view_id);
 void zerofido_ui_show_interaction(ZerofidoApp *app);
 void zerofido_ui_hide_interaction(ZerofidoApp *app);
 bool zerofido_ui_ensure_view(ZerofidoApp *app, ZfViewId view_id);
+#if ZF_VAULT_PIN_KEK
+/* Opens the PIN-input view in vault-unlock mode. Safe to call whether or not
+ * a vault is configured -- if the pin_buffers allocation fails, falls back
+ * to ZfViewStatus like any other UI-unavailable case. */
+void zerofido_ui_open_vault_unlock_prompt(ZerofidoApp *app);
+#endif

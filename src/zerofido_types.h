@@ -86,6 +86,8 @@
 #define ZF_STORE_FORMAT_VERSION 1U
 #if ZF_VAULT_PIN_KEK
 #define ZF_STORE_VAULT_VERSION 2U
+/* TODO: needs an on-device PBKDF2 benchmark; conservative placeholder for now. */
+#define ZF_VAULT_PBKDF2_ITERATIONS 50000U
 #endif
 #define ZF_MAX_RP_ID_LEN 256
 #define ZF_MAX_USER_ID_LEN 64

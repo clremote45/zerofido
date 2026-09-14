@@ -31,6 +31,10 @@
 #include "../zerofido_ui_i.h"
 #include "status.h"
 #include "../app/lifecycle.h"
+#if ZF_VAULT_PIN_KEK
+#include "../vault/zf_vault_key.h"
+#include "../vault/zf_vault_session.h"
+#endif
 
 #if !defined(ZF_USB_ONLY) && !defined(ZF_NFC_ONLY)
 #define ZF_HAS_TRANSPORT_SETTING 1
@@ -93,6 +97,11 @@ static bool zerofido_begin_local_maintenance(ZerofidoApp *app);
 static void zerofido_end_local_maintenance(ZerofidoApp *app);
 static bool zerofido_settings_available(ZerofidoApp *app);
 static void zerofido_ui_prune_rare_views(ZerofidoApp *app);
+static void zerofido_finish_rename_credential(ZerofidoApp *app, const char *new_name);
+static void zerofido_open_rename_credential(ZerofidoApp *app);
+#if ZF_VAULT_PIN_KEK
+static void zerofido_open_vault_pin_confirm(ZerofidoApp *app);
+#endif
 
 #if ZF_DEV_SCREENSHOT
 static void zerofido_dev_screenshot_framebuffer_callback(uint8_t *data, size_t size,
@@ -108,7 +117,14 @@ enum {
     ZfSettingsItemFido2Profile = 2,
     ZfSettingsItemAttestation = 3,
     ZfSettingsItemPin = 4,
+#if ZF_VAULT_PIN_KEK
+    ZfSettingsItemVaultPinSet = 5,
+    ZfSettingsItemVaultPinChange = 6,
+    ZfSettingsItemVaultPinRemove = 7,
+    ZfSettingsItemStartupReset = 8,
+#else
     ZfSettingsItemStartupReset = 5,
+#endif
 };
 
 enum {
@@ -127,7 +143,7 @@ typedef struct {
     bool allow_delete;
     char website[ZF_MAX_RP_ID_LEN];
     char account[ZF_MAX_DISPLAY_NAME_LEN];
-    char type[24];
+    char type[32];
 } ZfCredentialDetailModel;
 
 _Static_assert(sizeof(ZfCredentialDisplayScratch) <= ZF_UI_SCRATCH_SIZE,
@@ -340,6 +356,13 @@ static void zerofido_open_pin_input(ZerofidoApp *app, ZfPinInputState state, con
     zerofido_ui_switch_to_view(app, ZfViewPinInput);
 }
 
+#if ZF_VAULT_PIN_KEK
+void zerofido_ui_open_vault_unlock_prompt(ZerofidoApp *app) {
+    zerofido_pin_reset_buffers(app);
+    zerofido_open_pin_input(app, ZfPinInputVaultUnlock, "Enter vault PIN", 1);
+}
+#endif
+
 static void zerofido_open_pin_confirm_dialog(ZerofidoApp *app, ZfPinConfirmAction action,
                                              ZfViewId return_view, const char *header,
                                              const char *text, const char *confirm_button) {
@@ -363,6 +386,14 @@ static void zerofido_open_pin_confirm(ZerofidoApp *app) {
     zerofido_open_pin_confirm_dialog(app, ZfPinConfirmActionRemove, ZfViewPinMenu, "Remove PIN?",
                                      "Entering the PIN will\nbe required again later", "Remove");
 }
+
+#if ZF_VAULT_PIN_KEK
+static void zerofido_open_vault_pin_confirm(ZerofidoApp *app) {
+    zerofido_open_pin_confirm_dialog(app, ZfPinConfirmActionVaultRemove, ZfViewSettings,
+                                     "Remove vault PIN?",
+                                     "Vault-locked passkeys will\nno longer be usable", "Remove");
+}
+#endif
 
 static void zerofido_open_pin_resume_confirm(ZerofidoApp *app) {
     zerofido_open_pin_confirm_dialog(app, ZfPinConfirmActionResume, ZfViewPinMenu, "Resume PIN?",
@@ -462,6 +493,19 @@ static void zerofido_refresh_settings_menu(ZerofidoApp *app) {
 #endif
     submenu_add_item(app->settings_menu, "PIN", ZfSettingsItemPin, zerofido_settings_menu_callback,
                      app);
+#if ZF_VAULT_PIN_KEK
+    if (zf_vault_session_is_configured(app->storage)) {
+        submenu_add_item(app->settings_menu, "Change vault PIN", ZfSettingsItemVaultPinChange,
+                         zerofido_settings_menu_callback, app);
+        submenu_add_item(app->settings_menu, "Remove vault PIN", ZfSettingsItemVaultPinRemove,
+                         zerofido_settings_menu_callback, app);
+        max_index = ZfSettingsItemVaultPinRemove;
+    } else {
+        submenu_add_item(app->settings_menu, "Set vault PIN", ZfSettingsItemVaultPinSet,
+                         zerofido_settings_menu_callback, app);
+        max_index = ZfSettingsItemVaultPinSet;
+    }
+#endif
     if (startup_reset_available) {
         submenu_add_item(app->settings_menu, "Reset app data", ZfSettingsItemStartupReset,
                          zerofido_settings_menu_callback, app);
@@ -696,6 +740,10 @@ static void zerofido_fill_credential_detail_model(ZerofidoApp *app,
     zerofido_copy_label(model->website, sizeof(model->website), website);
     zerofido_copy_label(model->account, sizeof(model->account), user);
     zerofido_copy_label(model->type, sizeof(model->type), type);
+#if ZF_VAULT_PIN_KEK
+    strncat(model->type, entry->storage_version == ZF_STORE_VAULT_VERSION ? " (v2)" : " (v1)",
+           sizeof(model->type) - strlen(model->type) - 1);
+#endif
     zerofido_ui_scratch_free(app, scratch, sizeof(*scratch));
     return;
 
@@ -752,6 +800,147 @@ static void zerofido_open_credential_detail(ZerofidoApp *app, uint32_t index) {
     if (!can_open) {
         return;
     }
+    zerofido_refresh_credential_detail(app);
+    zerofido_ui_switch_to_view(app, ZfViewCredentialDetail);
+}
+
+/*
+ * Opens the shared PIN-input widget pre-filled with the credential's current
+ * display name, so renaming edits in place instead of starting blank. Only
+ * user_display_name is touched -- never rp_id or user_name, which the
+ * relying party itself may show back to the user.
+ */
+static void zerofido_open_rename_credential(ZerofidoApp *app) {
+    ZfPinBuffers *pin_buffers = NULL;
+    ZfCredentialIndexEntry entry = {0};
+    bool entry_valid = false;
+    ZfCredentialDisplayScratch *scratch = NULL;
+    bool loaded = false;
+
+    furi_mutex_acquire(app->ui_mutex, FuriWaitForever);
+    if (app->store.records && app->credentials_selected_index < app->store.count &&
+        app->store.records[app->credentials_selected_index].in_use) {
+        entry = app->store.records[app->credentials_selected_index];
+        entry_valid = true;
+    }
+    furi_mutex_release(app->ui_mutex);
+    if (!entry_valid) {
+        return;
+    }
+
+    pin_buffers = zerofido_pin_buffers_acquire(app);
+    if (!pin_buffers) {
+        zerofido_notify_error(app);
+        zerofido_ui_set_status(app, "Rename unavailable");
+        zerofido_ui_refresh_status_line(app);
+        return;
+    }
+
+    scratch = zerofido_ui_scratch_alloc(app, sizeof(*scratch));
+    if (scratch) {
+        loaded = zf_store_load_record_for_display_with_buffer(
+            app->storage, &entry, &scratch->record, scratch->store_io, sizeof(scratch->store_io));
+    }
+
+    zf_crypto_secure_zero(pin_buffers->input, sizeof(pin_buffers->input));
+    if (loaded) {
+        strncpy(pin_buffers->input, scratch->record.user_display_name,
+               sizeof(pin_buffers->input) - 1);
+    }
+    if (scratch) {
+        zf_crypto_secure_zero(&scratch->record, sizeof(scratch->record));
+        zerofido_ui_scratch_free(app, scratch, sizeof(*scratch));
+    }
+    if (!loaded) {
+        zerofido_pin_reset_buffers(app);
+        zerofido_notify_error(app);
+        zerofido_ui_set_status(app, "Rename unavailable");
+        zerofido_ui_refresh_status_line(app);
+        return;
+    }
+
+    if (!zerofido_ui_ensure_view(app, ZfViewPinInput)) {
+        zerofido_pin_reset_buffers(app);
+        return;
+    }
+    app->pin_input_state = ZfPinInputRenameCredential;
+    text_input_reset(app->pin_input_view);
+    text_input_set_header_text(app->pin_input_view, "Rename passkey");
+    text_input_set_minimum_length(app->pin_input_view, 1);
+    text_input_set_validator(app->pin_input_view, zerofido_pin_input_validator_callback, app);
+    text_input_set_result_callback(app->pin_input_view, zerofido_pin_input_result_callback, app,
+                                   pin_buffers->input, sizeof(pin_buffers->input), false);
+    zerofido_ui_switch_to_view(app, ZfViewPinInput);
+}
+
+/*
+ * Saves the edited display name. Which write path a credential needs is
+ * fixed at creation time (ZfCredentialIndexEntry.storage_version), same as
+ * every other vault-aware store operation -- v1 records never need a vmk,
+ * v2 records always do, and a locked vault simply fails the rename rather
+ * than silently falling back to a plain rewrite.
+ */
+static void zerofido_finish_rename_credential(ZerofidoApp *app, const char *new_name) {
+    uint32_t index = app->credentials_selected_index;
+    ZfCredentialIndexEntry entry = {0};
+    bool entry_valid = false;
+    ZfCredentialDisplayScratch *scratch = NULL;
+    bool ok = false;
+
+    furi_mutex_acquire(app->ui_mutex, FuriWaitForever);
+    if (app->store.records && index < app->store.count && app->store.records[index].in_use) {
+        entry = app->store.records[index];
+        entry_valid = true;
+    }
+    furi_mutex_release(app->ui_mutex);
+
+    if (entry_valid && zerofido_begin_local_maintenance(app)) {
+        scratch = zerofido_ui_scratch_alloc(app, sizeof(*scratch));
+        if (scratch && zf_store_load_record_for_display_with_buffer(
+                           app->storage, &entry, &scratch->record, scratch->store_io,
+                           sizeof(scratch->store_io))) {
+            strncpy(scratch->record.user_display_name, new_name,
+                   sizeof(scratch->record.user_display_name) - 1);
+            scratch->record.user_display_name[sizeof(scratch->record.user_display_name) - 1] =
+                '\0';
+
+            furi_mutex_acquire(app->ui_mutex, FuriWaitForever);
+#if ZF_VAULT_PIN_KEK
+            if (entry.storage_version == ZF_STORE_VAULT_VERSION) {
+                uint8_t vault_vmk[ZF_VAULT_KEY_LEN];
+                if (zf_vault_session_copy_key(vault_vmk)) {
+                    ok = zf_store_update_record_with_buffer_vault(
+                        app->storage, &app->store, &scratch->record, vault_vmk, scratch->store_io,
+                        sizeof(scratch->store_io));
+                    zf_crypto_secure_zero(vault_vmk, sizeof(vault_vmk));
+                }
+            } else {
+                ok = zf_store_update_record_with_buffer(app->storage, &app->store, &scratch->record,
+                                                        scratch->store_io,
+                                                        sizeof(scratch->store_io));
+            }
+#else
+            ok = zf_store_update_record_with_buffer(app->storage, &app->store, &scratch->record,
+                                                    scratch->store_io, sizeof(scratch->store_io));
+#endif
+            furi_mutex_release(app->ui_mutex);
+            zf_crypto_secure_zero(&scratch->record, sizeof(scratch->record));
+        }
+        if (scratch) {
+            zerofido_ui_scratch_free(app, scratch, sizeof(*scratch));
+        }
+        zerofido_end_local_maintenance(app);
+    }
+
+    zerofido_pin_reset_buffers(app);
+    if (ok) {
+        zerofido_notify_success(app);
+        zerofido_ui_set_status(app, "Passkey renamed");
+    } else {
+        zerofido_notify_error(app);
+        zerofido_ui_set_status(app, "Rename failed");
+    }
+    zerofido_ui_refresh_status_line(app);
     zerofido_refresh_credential_detail(app);
     zerofido_ui_switch_to_view(app, ZfViewCredentialDetail);
 }
@@ -867,6 +1056,20 @@ static void zerofido_settings_menu_callback(void *context, uint32_t index) {
         zerofido_refresh_pin_menu(app);
         zerofido_ui_switch_to_view(app, ZfViewPinMenu);
         break;
+#if ZF_VAULT_PIN_KEK
+    case ZfSettingsItemVaultPinSet:
+        zerofido_pin_reset_buffers(app);
+        zerofido_open_pin_input(app, ZfPinInputVaultSetNew, "Enter vault PIN", 4);
+        break;
+    case ZfSettingsItemVaultPinChange:
+        zerofido_pin_reset_buffers(app);
+        zerofido_open_pin_input(app, ZfPinInputVaultChangeCurrent, "Enter current vault PIN", 4);
+        break;
+    case ZfSettingsItemVaultPinRemove:
+        zerofido_pin_reset_buffers(app);
+        zerofido_open_pin_input(app, ZfPinInputVaultRemoveCurrent, "Enter current vault PIN", 4);
+        break;
+#endif
     case ZfSettingsItemStartupReset:
         zerofido_open_startup_reset_confirm(app);
         break;
@@ -904,6 +1107,35 @@ static bool zerofido_pin_input_validator_callback(const char *text, FuriString *
     case ZfPinInputChangeCurrent:
     case ZfPinInputRemoveCurrent:
         return zerofido_pin_status_message(zerofido_pin_length_status(text), error);
+    case ZfPinInputRenameCredential:
+        if (strlen(text) < 1) {
+            furi_string_set(error, "Name required");
+            return false;
+        }
+        return true;
+#if ZF_VAULT_PIN_KEK
+    case ZfPinInputVaultUnlock:
+        /* No client-side length gate: correctness can only be checked by the
+         * unlock attempt itself (Phase 2's sealed-envelope digest check), so
+         * rejecting short input here would only add friction, not security. */
+        return true;
+    case ZfPinInputVaultSetNew:
+    case ZfPinInputVaultChangeNew:
+    case ZfPinInputVaultChangeCurrent:
+    case ZfPinInputVaultRemoveCurrent:
+        return zerofido_pin_status_message(zerofido_pin_length_status(text), error);
+    case ZfPinInputVaultSetConfirm:
+    case ZfPinInputVaultChangeConfirm:
+        if (!pin_buffers) {
+            furi_string_set(error, "PIN input unavailable");
+            return false;
+        }
+        if (strcmp(text, pin_buffers->new_pin) != 0) {
+            furi_string_set(error, "PINs do not match");
+            return false;
+        }
+        return true;
+#endif
     case ZfPinInputNone:
     default:
         return true;
@@ -966,6 +1198,129 @@ static void zerofido_pin_input_result_callback(void *context) {
         pin_buffers->current[sizeof(pin_buffers->current) - 1] = '\0';
         zerofido_open_pin_confirm(app);
         return;
+    case ZfPinInputRenameCredential:
+        zerofido_finish_rename_credential(app, pin_buffers->input);
+        return;
+#if ZF_VAULT_PIN_KEK
+    case ZfPinInputVaultUnlock: {
+        ZfVaultKeyLoadStatus vault_status;
+
+        if (!zerofido_begin_local_maintenance(app)) {
+            zerofido_notify_error(app);
+            zerofido_ui_set_status(app, "Busy, try again");
+            zerofido_pin_reset_buffers(app);
+            zerofido_ui_switch_to_view(app, ZfViewStatus);
+            return;
+        }
+        vault_status =
+            zf_vault_session_unlock(app->storage, pin_buffers->input, strlen(pin_buffers->input));
+        zerofido_end_local_maintenance(app);
+        zerofido_pin_reset_buffers(app);
+
+        if (vault_status == ZfVaultKeyLoadOk) {
+            uint8_t vault_vmk[ZF_VAULT_KEY_LEN];
+            if (zf_vault_session_copy_key(vault_vmk)) {
+                uint8_t *scratch_io = zerofido_ui_scratch_alloc(app, ZF_STORE_RECORD_IO_SIZE);
+                if (scratch_io) {
+                    furi_mutex_acquire(app->ui_mutex, FuriWaitForever);
+                    zf_store_append_vault_records_with_buffer(app->storage, &app->store, vault_vmk,
+                                                              scratch_io, ZF_STORE_RECORD_IO_SIZE);
+                    furi_mutex_release(app->ui_mutex);
+                    zerofido_ui_scratch_free(app, scratch_io, ZF_STORE_RECORD_IO_SIZE);
+                }
+                zf_crypto_secure_zero(vault_vmk, sizeof(vault_vmk));
+            }
+            zerofido_notify_success(app);
+            zerofido_ui_set_status(app, NULL);
+        } else {
+            zerofido_notify_error(app);
+            zerofido_ui_set_status(app, "Wrong vault PIN");
+        }
+        zerofido_ui_refresh_status_line(app);
+        zerofido_ui_refresh_credentials_status(app);
+        zerofido_ui_switch_to_view(app, ZfViewStatus);
+        return;
+    }
+    case ZfPinInputVaultSetNew:
+        strncpy(pin_buffers->new_pin, pin_buffers->input, sizeof(pin_buffers->new_pin) - 1);
+        pin_buffers->new_pin[sizeof(pin_buffers->new_pin) - 1] = '\0';
+        zerofido_open_pin_input(app, ZfPinInputVaultSetConfirm, "Confirm vault PIN", 4);
+        return;
+    case ZfPinInputVaultSetConfirm: {
+        uint8_t vmk[ZF_VAULT_KEY_LEN];
+        bool ok;
+
+        if (!zerofido_begin_local_maintenance(app)) {
+            zerofido_notify_error(app);
+            zerofido_ui_set_status(app, "Busy, try again");
+            zerofido_ui_switch_to_view(app, ZfViewSettings);
+            return;
+        }
+        ok = zf_vault_key_create(app->storage, pin_buffers->new_pin, strlen(pin_buffers->new_pin),
+                                 ZF_VAULT_PBKDF2_ITERATIONS, vmk);
+        zf_crypto_secure_zero(vmk, sizeof(vmk));
+        if (ok) {
+            /* Establish the session immediately so newly-created passkeys can
+             * be written as v2 right away, without a separate unlock step. */
+            zf_vault_session_unlock(app->storage, pin_buffers->new_pin,
+                                    strlen(pin_buffers->new_pin));
+        }
+        zerofido_end_local_maintenance(app);
+        zerofido_pin_reset_buffers(app);
+        if (ok) {
+            zerofido_notify_success(app);
+            zerofido_ui_set_status(app, "Vault PIN set");
+        } else {
+            zerofido_notify_error(app);
+            zerofido_ui_set_status(app, "Vault PIN setup failed");
+        }
+        zerofido_ui_refresh_status_line(app);
+        zerofido_refresh_settings_menu(app);
+        zerofido_ui_switch_to_view(app, ZfViewSettings);
+        return;
+    }
+    case ZfPinInputVaultChangeCurrent:
+        strncpy(pin_buffers->current, pin_buffers->input, sizeof(pin_buffers->current) - 1);
+        pin_buffers->current[sizeof(pin_buffers->current) - 1] = '\0';
+        zerofido_open_pin_input(app, ZfPinInputVaultChangeNew, "Enter new vault PIN", 4);
+        return;
+    case ZfPinInputVaultChangeNew:
+        strncpy(pin_buffers->new_pin, pin_buffers->input, sizeof(pin_buffers->new_pin) - 1);
+        pin_buffers->new_pin[sizeof(pin_buffers->new_pin) - 1] = '\0';
+        zerofido_open_pin_input(app, ZfPinInputVaultChangeConfirm, "Confirm new vault PIN", 4);
+        return;
+    case ZfPinInputVaultChangeConfirm: {
+        bool ok;
+
+        if (!zerofido_begin_local_maintenance(app)) {
+            zerofido_notify_error(app);
+            zerofido_ui_set_status(app, "Busy, try again");
+            zerofido_ui_switch_to_view(app, ZfViewSettings);
+            return;
+        }
+        ok = zf_vault_key_rewrap(app->storage, pin_buffers->current, strlen(pin_buffers->current),
+                                 pin_buffers->new_pin, strlen(pin_buffers->new_pin),
+                                 ZF_VAULT_PBKDF2_ITERATIONS);
+        zerofido_end_local_maintenance(app);
+        zerofido_pin_reset_buffers(app);
+        if (ok) {
+            zerofido_notify_success(app);
+            zerofido_ui_set_status(app, "Vault PIN changed");
+        } else {
+            zerofido_notify_error(app);
+            zerofido_ui_set_status(app, "Wrong current vault PIN");
+        }
+        zerofido_ui_refresh_status_line(app);
+        zerofido_refresh_settings_menu(app);
+        zerofido_ui_switch_to_view(app, ZfViewSettings);
+        return;
+    }
+    case ZfPinInputVaultRemoveCurrent:
+        strncpy(pin_buffers->current, pin_buffers->input, sizeof(pin_buffers->current) - 1);
+        pin_buffers->current[sizeof(pin_buffers->current) - 1] = '\0';
+        zerofido_open_vault_pin_confirm(app);
+        return;
+#endif
     case ZfPinInputNone:
     default:
         return;
@@ -1044,6 +1399,32 @@ static void zerofido_pin_confirm_result_callback(DialogExResult result, void *co
                     failure_status = "Could not delete passkey";
                 }
                 break;
+#if ZF_VAULT_PIN_KEK
+            case ZfPinConfirmActionVaultRemove: {
+                ZfPinBuffers *pin_buffers = app->pin_buffers;
+                uint8_t vmk[ZF_VAULT_KEY_LEN];
+                ZfVaultKeyLoadStatus verify_status;
+
+                if (!pin_buffers) {
+                    failure_status = "PIN input unavailable";
+                    break;
+                }
+                verify_status = zf_vault_key_unlock(app->storage, pin_buffers->current,
+                                                    strlen(pin_buffers->current), vmk);
+                zf_crypto_secure_zero(vmk, sizeof(vmk));
+                if (verify_status == ZfVaultKeyLoadOk) {
+                    action_ok = zf_vault_key_destroy(app->storage);
+                    if (action_ok) {
+                        zf_vault_session_lock();
+                    } else {
+                        failure_status = "Vault PIN removal failed";
+                    }
+                } else {
+                    failure_status = "Wrong vault PIN";
+                }
+                break;
+            }
+#endif
             case ZfPinConfirmActionNone:
             default:
                 break;
@@ -1071,6 +1452,13 @@ static void zerofido_pin_confirm_result_callback(DialogExResult result, void *co
                 zerofido_refresh_pin_menu(app);
                 zerofido_ui_set_status(app, "PIN attempts resumed");
                 zerofido_ui_refresh_status_line(app);
+#if ZF_VAULT_PIN_KEK
+            } else if (action == ZfPinConfirmActionVaultRemove) {
+                zerofido_pin_reset_buffers(app);
+                zerofido_refresh_settings_menu(app);
+                zerofido_ui_set_status(app, "Vault PIN removed");
+                zerofido_ui_refresh_status_line(app);
+#endif
             } else {
                 zerofido_pin_reset_buffers(app);
                 zerofido_refresh_pin_menu(app);
@@ -1245,6 +1633,7 @@ static void zerofido_credential_detail_draw_callback(Canvas *canvas, void *model
     elements_button_left(canvas, "Back");
     if (detail->allow_delete) {
         elements_button_center(canvas, "Delete");
+        elements_button_right(canvas, "Rename");
     }
 }
 
@@ -1276,6 +1665,22 @@ static bool zerofido_credential_detail_input_callback(InputEvent *event, void *c
     if (event->key == InputKeyLeft) {
         zerofido_ui_refresh_status_line(app);
         zerofido_ui_switch_to_view(app, ZfViewStatus);
+        return true;
+    }
+
+    if (event->key == InputKeyRight) {
+        bool allow_edit = false;
+        with_view_model(app->credential_detail_view, ZfCredentialDetailModel * model,
+                        { allow_edit = model->allow_delete; }, false);
+        if (!allow_edit) {
+            return true;
+        }
+        if (zerofido_interaction_pending(app)) {
+            zerofido_ui_set_status(app, "Finish the active request first");
+            zerofido_refresh_credential_detail(app);
+            return true;
+        }
+        zerofido_open_rename_credential(app);
         return true;
     }
 

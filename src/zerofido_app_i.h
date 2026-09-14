@@ -93,6 +93,16 @@ typedef enum {
     ZfPinInputChangeNew,
     ZfPinInputChangeConfirm,
     ZfPinInputRemoveCurrent,
+    ZfPinInputRenameCredential,
+#if ZF_VAULT_PIN_KEK
+    ZfPinInputVaultUnlock,
+    ZfPinInputVaultSetNew,
+    ZfPinInputVaultSetConfirm,
+    ZfPinInputVaultChangeCurrent,
+    ZfPinInputVaultChangeNew,
+    ZfPinInputVaultChangeConfirm,
+    ZfPinInputVaultRemoveCurrent,
+#endif
 } ZfPinInputState;
 
 typedef enum {
@@ -101,6 +111,9 @@ typedef enum {
     ZfPinConfirmActionResume,
     ZfPinConfirmActionResetAppData,
     ZfPinConfirmActionDeleteCredential,
+#if ZF_VAULT_PIN_KEK
+    ZfPinConfirmActionVaultRemove,
+#endif
 } ZfPinConfirmAction;
 
 typedef struct {

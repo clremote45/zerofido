@@ -21,6 +21,9 @@
 #include "zerofido_telemetry.h"
 #include "zerofido_ui.h"
 #include "zerofido_ui_i.h"
+#if ZF_VAULT_PIN_KEK
+#include "vault/zf_vault_session.h"
+#endif
 
 /*
  * Application composition root. Lifecycle setup opens storage/UI/runtime state,
@@ -43,7 +46,15 @@ int32_t zerofido_main(void *p) {
         return -1;
     }
 
+#if ZF_VAULT_PIN_KEK
+    if (zf_vault_session_is_configured(app->storage)) {
+        zerofido_ui_open_vault_unlock_prompt(app);
+    } else {
+        zerofido_ui_switch_to_view(app, ZfViewStatus);
+    }
+#else
     zerofido_ui_switch_to_view(app, ZfViewStatus);
+#endif
     zf_telemetry_log("startup async before");
     zf_app_lifecycle_startup_async(app);
     zf_telemetry_log("startup async after");
