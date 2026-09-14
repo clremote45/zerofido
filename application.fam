@@ -96,9 +96,17 @@ if not vault_pin_kek:
     sources.append("!zf_vault_key.c")
     sources.append("!zf_vault_session.c")
 
+app_name = "ZeroFIDO"
+if vault_pin_kek:
+    app_name += " PIN"
+if profile == "usb":
+    app_name += " (USB)"
+elif profile == "nfc":
+    app_name += " (NFC)"
+
 App(
     appid="zerofido",
-    name="ZeroFIDO",
+    name=app_name,
     apptype=FlipperAppType.EXTERNAL,
     entry_point="zerofido_main",
     stack_size=4 * 1024,
