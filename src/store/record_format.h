@@ -55,3 +55,28 @@ bool zf_store_record_format_reserve_counter(Storage *storage, const ZfCredential
 bool zf_store_record_format_write_record_with_buffer(Storage *storage,
                                                      const ZfCredentialRecord *record,
                                                      uint8_t *buffer, size_t buffer_size);
+
+#if ZF_VAULT_PIN_KEK
+#include "../vault/zf_vault_key.h"
+
+/*
+ * Vault-aware record I/O (format version 2): the enclave-wrapped private key
+ * gets a second AES-256-CBC layer keyed by the unlocked vault's VMK, so an
+ * offline reader of the SD card needs the vault PIN (not just this device)
+ * to recover a usable private key. RP ID, user ID, username, and display
+ * name stay plaintext exactly as in v1 -- only the private key gains the
+ * extra layer. A v2 record cannot be decoded without the VMK; there is no
+ * display-only path that skips it. Nothing calls these yet.
+ */
+bool zf_store_record_format_encode_vault(const ZfCredentialRecord *record,
+                                         const uint8_t vmk[ZF_VAULT_KEY_LEN], uint8_t *out,
+                                         size_t *out_size);
+bool zf_store_record_format_write_record_with_buffer_vault(Storage *storage,
+                                                            const ZfCredentialRecord *record,
+                                                            const uint8_t vmk[ZF_VAULT_KEY_LEN],
+                                                            uint8_t *buffer, size_t buffer_size);
+bool zf_store_record_format_load_record_with_buffer_vault(Storage *storage, const char *file_name,
+                                                           ZfCredentialRecord *record,
+                                                           const uint8_t vmk[ZF_VAULT_KEY_LEN],
+                                                           uint8_t *buffer, size_t buffer_size);
+#endif
