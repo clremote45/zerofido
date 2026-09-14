@@ -33,6 +33,9 @@
 #include "../../zerofido_crypto.h"
 #include "../../zerofido_notify.h"
 #include "../../zerofido_store.h"
+#if ZF_VAULT_PIN_KEK
+#include "../../vault/zf_vault_session.h"
+#endif
 
 #if defined(ZF_RELEASE_DIAGNOSTICS) && ZF_RELEASE_DIAGNOSTICS
 #define ZF_CTAP_GA_DIAG(text) FURI_LOG_I("ZeroFIDO:CTAP", "GA %s", (text))
@@ -144,14 +147,36 @@ static bool zf_ctap_load_assertion_record(ZerofidoApp *app, size_t record_index,
                                           size_t store_io_size) {
     ZfCredentialIndexEntry entry = {0};
     bool snapshot_ok = false;
+    bool loaded = false;
 
     furi_mutex_acquire(app->ui_mutex, FuriWaitForever);
     snapshot_ok = zf_ctap_snapshot_index_entry_locked(app, record_index, &entry);
     furi_mutex_release(app->ui_mutex);
 
-    if (!snapshot_ok ||
-        !zf_store_load_record_with_buffer(app->storage, &entry, record, store_io, store_io_size) ||
-        strcmp(record->rp_id, rp_id) != 0) {
+    if (!snapshot_ok) {
+        zf_crypto_secure_zero(record, sizeof(*record));
+        return false;
+    }
+
+#if ZF_VAULT_PIN_KEK
+    if (entry.storage_version == ZF_STORE_VAULT_VERSION) {
+        uint8_t vault_vmk[ZF_VAULT_KEY_LEN];
+        /* Locked vault (no key available) -> this credential just doesn't load,
+         * same as any other unreadable record; no special-case error needed. */
+        if (zf_vault_session_copy_key(vault_vmk)) {
+            loaded = zf_store_load_record_with_buffer_vault(app->storage, &entry, vault_vmk, record,
+                                                             store_io, store_io_size);
+            zf_crypto_secure_zero(vault_vmk, sizeof(vault_vmk));
+        }
+    } else {
+        loaded =
+            zf_store_load_record_with_buffer(app->storage, &entry, record, store_io, store_io_size);
+    }
+#else
+    loaded = zf_store_load_record_with_buffer(app->storage, &entry, record, store_io, store_io_size);
+#endif
+
+    if (!loaded || strcmp(record->rp_id, rp_id) != 0) {
         zf_crypto_secure_zero(record, sizeof(*record));
         return false;
     }

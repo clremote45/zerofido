@@ -167,4 +167,11 @@ bool zf_store_update_record_with_buffer_vault(Storage *storage, ZfCredentialStor
                                               const ZfCredentialRecord *record,
                                               const uint8_t vmk[ZF_VAULT_KEY_LEN], uint8_t *buffer,
                                               size_t buffer_size);
+bool zf_store_write_record_file_with_buffer_vault(Storage *storage, const ZfCredentialRecord *record,
+                                                  const uint8_t vmk[ZF_VAULT_KEY_LEN],
+                                                  uint8_t *buffer, size_t buffer_size);
+bool zf_store_load_record_with_buffer_vault(Storage *storage, const ZfCredentialIndexEntry *entry,
+                                            const uint8_t vmk[ZF_VAULT_KEY_LEN],
+                                            ZfCredentialRecord *out_record, uint8_t *buffer,
+                                            size_t buffer_size);
 #endif

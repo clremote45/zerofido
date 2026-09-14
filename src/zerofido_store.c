@@ -1049,4 +1049,25 @@ bool zf_store_update_record_with_buffer_vault(Storage *storage, ZfCredentialStor
     return false;
 }
 
+/* Thin wrapper matching zf_store_write_record_file_with_buffer's split-write
+ * shape -- makeCredential finishes file I/O with this before publishing the
+ * index entry separately, so the two steps stay independently retryable. */
+bool zf_store_write_record_file_with_buffer_vault(Storage *storage, const ZfCredentialRecord *record,
+                                                  const uint8_t vmk[ZF_VAULT_KEY_LEN],
+                                                  uint8_t *buffer, size_t buffer_size) {
+    return zf_store_record_format_write_record_with_buffer_vault(storage, record, vmk, buffer,
+                                                                  buffer_size);
+}
+
+/* Entry-based counterpart to zf_store_load_record_with_buffer, for callers
+ * (getAssertion) that already snapshot a ZfCredentialIndexEntry under the UI
+ * mutex before loading outside the lock. */
+bool zf_store_load_record_with_buffer_vault(Storage *storage, const ZfCredentialIndexEntry *entry,
+                                            const uint8_t vmk[ZF_VAULT_KEY_LEN],
+                                            ZfCredentialRecord *out_record, uint8_t *buffer,
+                                            size_t buffer_size) {
+    return zf_store_load_record_internal_with_buffer_vault(storage, entry, vmk, out_record, buffer,
+                                                            buffer_size);
+}
+
 #endif

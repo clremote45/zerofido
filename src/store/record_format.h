@@ -59,8 +59,6 @@ bool zf_store_record_format_write_record_with_buffer(Storage *storage,
 #if ZF_VAULT_PIN_KEK
 #include "../vault/zf_vault_key.h"
 
-#define ZF_STORE_VAULT_VERSION 2U
-
 /*
  * Vault-aware record I/O (format version 2): the enclave-wrapped private key
  * gets a second AES-256-CBC layer keyed by the unlocked vault's VMK, so an

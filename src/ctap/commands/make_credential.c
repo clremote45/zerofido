@@ -32,6 +32,9 @@
 #include "../../zerofido_crypto.h"
 #include "../../zerofido_notify.h"
 #include "../../zerofido_store.h"
+#if ZF_VAULT_PIN_KEK
+#include "../../vault/zf_vault_session.h"
+#endif
 
 #if defined(ZF_RELEASE_DIAGNOSTICS) && ZF_RELEASE_DIAGNOSTICS
 #define ZF_CTAP_MC_DIAG(text) FURI_LOG_I("ZeroFIDO:CTAP", "MC %s", (text))
@@ -250,9 +253,26 @@ uint8_t zf_ctap_handle_make_credential(ZerofidoApp *app, ZfTransportSessionId se
     }
 
     ZF_CTAP_MC_DIAG("store write");
+#if ZF_VAULT_PIN_KEK
+    bool wrote;
+    uint8_t vault_vmk[ZF_VAULT_KEY_LEN];
+    bool vault_unlocked = zf_vault_session_is_unlocked() && zf_vault_session_copy_key(vault_vmk);
+    scratch->record.storage_version = vault_unlocked ? ZF_STORE_VAULT_VERSION : ZF_STORE_FORMAT_VERSION;
+    if (vault_unlocked) {
+        wrote = zf_store_write_record_file_with_buffer_vault(app->storage, &scratch->record,
+                                                              vault_vmk, scratch->work.io.store_io,
+                                                              sizeof(scratch->work.io.store_io));
+        zf_crypto_secure_zero(vault_vmk, sizeof(vault_vmk));
+    } else {
+        wrote = zf_store_write_record_file_with_buffer(app->storage, &scratch->record,
+                                                        scratch->work.io.store_io,
+                                                        sizeof(scratch->work.io.store_io));
+    }
+#else
     bool wrote = zf_store_write_record_file_with_buffer(app->storage, &scratch->record,
                                                         scratch->work.io.store_io,
                                                         sizeof(scratch->work.io.store_io));
+#endif
     if (!wrote) {
         status = ZF_CTAP_ERR_KEY_STORE_FULL;
         goto cleanup;
