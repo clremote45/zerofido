@@ -36,6 +36,7 @@ jobs:
       ZEROFIDO_DEV_SCREENSHOT: "0"
       ZEROFIDO_DEV_FIDO2_1: "1"
       ZEROFIDO_PACKED_ATTESTATION: "1"
+      ZEROFIDO_VAULT_PIN_KEK: "0"
 
     steps:
       - name: Check out repository

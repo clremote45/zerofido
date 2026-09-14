@@ -23,6 +23,7 @@ auto_accept_requests = env_flag("ZEROFIDO_AUTO_ACCEPT_REQUESTS", False)
 dev_screenshot = env_flag("ZEROFIDO_DEV_SCREENSHOT", False)
 dev_fido2_1 = env_flag("ZEROFIDO_DEV_FIDO2_1", False)
 packed_attestation = env_flag("ZEROFIDO_PACKED_ATTESTATION", True)
+vault_pin_kek = env_flag("ZEROFIDO_VAULT_PIN_KEK", False)
 
 cdefines = [
     f"ZF_RELEASE_DIAGNOSTICS={1 if release_diagnostics else 0}",
@@ -31,6 +32,7 @@ cdefines = [
     f"ZF_DEV_SCREENSHOT={1 if dev_screenshot else 0}",
     f"ZF_DEV_FIDO2_1={1 if dev_fido2_1 else 0}",
     f"ZF_PACKED_ATTESTATION={1 if packed_attestation else 0}",
+    f"ZF_VAULT_PIN_KEK={1 if vault_pin_kek else 0}",
 ]
 sources = [
     "*.c",
@@ -89,6 +91,10 @@ if not release_diagnostics:
     sources.append("!nfc_trace.c")
 if not usb_diagnostics:
     sources.append("!zerofido_usb_diagnostics.c")
+if not vault_pin_kek:
+    sources.append("!pbkdf2.c")
+    sources.append("!zf_vault_key.c")
+    sources.append("!zf_vault_session.c")
 
 App(
     appid="zerofido",
