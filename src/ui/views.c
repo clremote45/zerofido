@@ -739,10 +739,11 @@ static void zerofido_fill_credential_detail_model(ZerofidoApp *app,
 
     zerofido_copy_label(model->website, sizeof(model->website), website);
     zerofido_copy_label(model->account, sizeof(model->account), user);
-    zerofido_copy_label(model->type, sizeof(model->type), type);
 #if ZF_VAULT_PIN_KEK
-    strncat(model->type, entry->storage_version == ZF_STORE_VAULT_VERSION ? " (v2)" : " (v1)",
-           sizeof(model->type) - strlen(model->type) - 1);
+    snprintf(model->type, sizeof(model->type), "%s%s", type,
+             entry->storage_version == ZF_STORE_VAULT_VERSION ? " (v2)" : " (v1)");
+#else
+    zerofido_copy_label(model->type, sizeof(model->type), type);
 #endif
     zerofido_ui_scratch_free(app, scratch, sizeof(*scratch));
     return;
