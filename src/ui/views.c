@@ -735,13 +735,13 @@ static void zerofido_fill_credential_detail_model(ZerofidoApp *app,
     } else {
         user = "No account name";
     }
-    type = scratch->record.resident_key ? "Discoverable (RK)" : "Saved passkey";
+    type = scratch->record.resident_key ? "Discoverable (RK)" : "Svd passkey";
 
     zerofido_copy_label(model->website, sizeof(model->website), website);
     zerofido_copy_label(model->account, sizeof(model->account), user);
 #if ZF_VAULT_PIN_KEK
     snprintf(model->type, sizeof(model->type), "%s%s", type,
-             entry->storage_version == ZF_STORE_VAULT_VERSION ? " (v2)" : " (v1)");
+             entry->storage_version == ZF_STORE_VAULT_VERSION ? " v2" : " v1");
 #else
     zerofido_copy_label(model->type, sizeof(model->type), type);
 #endif
