@@ -1244,7 +1244,7 @@ static void zerofido_credential_detail_draw_callback(Canvas *canvas, void *model
 
     elements_button_left(canvas, "Back");
     if (detail->allow_delete) {
-        elements_button_center(canvas, "Delete");
+        elements_button_center(canvas, "Del");
     }
 }
 
