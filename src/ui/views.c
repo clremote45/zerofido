@@ -1210,7 +1210,7 @@ static void zerofido_pin_input_result_callback(void *context) {
             zerofido_notify_error(app);
             zerofido_ui_set_status(app, "Busy, try again");
             zerofido_pin_reset_buffers(app);
-            zerofido_ui_switch_to_view(app, ZfViewStatus);
+            zerofido_open_pin_input(app, ZfPinInputVaultUnlock, "Vault busy - retry", 1);
             return;
         }
         vault_status =
@@ -1242,13 +1242,14 @@ static void zerofido_pin_input_result_callback(void *context) {
             zf_app_lifecycle_restart_transport(app);
             zerofido_notify_success(app);
             zerofido_ui_set_status(app, NULL);
+            zerofido_ui_refresh_status_line(app);
+            zerofido_ui_refresh_credentials_status(app);
+            zerofido_ui_switch_to_view(app, ZfViewStatus);
         } else {
             zerofido_notify_error(app);
             zerofido_ui_set_status(app, "Wrong vault PIN");
+            zerofido_open_pin_input(app, ZfPinInputVaultUnlock, "Wrong vault PIN", 1);
         }
-        zerofido_ui_refresh_status_line(app);
-        zerofido_ui_refresh_credentials_status(app);
-        zerofido_ui_switch_to_view(app, ZfViewStatus);
         return;
     }
     case ZfPinInputVaultSetNew:
@@ -1316,13 +1317,14 @@ static void zerofido_pin_input_result_callback(void *context) {
         if (ok) {
             zerofido_notify_success(app);
             zerofido_ui_set_status(app, "Vault PIN changed");
+            zerofido_ui_refresh_status_line(app);
+            zerofido_refresh_settings_menu(app);
+            zerofido_ui_switch_to_view(app, ZfViewSettings);
         } else {
             zerofido_notify_error(app);
             zerofido_ui_set_status(app, "Wrong current vault PIN");
+            zerofido_open_pin_input(app, ZfPinInputVaultChangeCurrent, "Wrong vault PIN", 4);
         }
-        zerofido_ui_refresh_status_line(app);
-        zerofido_refresh_settings_menu(app);
-        zerofido_ui_switch_to_view(app, ZfViewSettings);
         return;
     }
     case ZfPinInputVaultRemoveCurrent:
@@ -1359,6 +1361,9 @@ static void zerofido_pin_confirm_result_callback(DialogExResult result, void *co
         bool action_ok = false;
         ZfPinConfirmAction action = app->pin_confirm_action;
         const char *failure_status = NULL;
+#if ZF_VAULT_PIN_KEK
+        bool retry_vault_pin = false;
+#endif
         if (!zerofido_begin_local_maintenance(app)) {
             zerofido_notify_error(app);
             zerofido_ui_set_status(app, "Busy, try again");
@@ -1431,6 +1436,7 @@ static void zerofido_pin_confirm_result_callback(DialogExResult result, void *co
                     }
                 } else {
                     failure_status = "Wrong vault PIN";
+                    retry_vault_pin = true;
                 }
                 break;
             }
@@ -1481,6 +1487,13 @@ static void zerofido_pin_confirm_result_callback(DialogExResult result, void *co
                 zerofido_ui_set_status(app, failure_status);
                 zerofido_ui_refresh_status_line(app);
             }
+#if ZF_VAULT_PIN_KEK
+            if (retry_vault_pin) {
+                zerofido_pin_reset_buffers(app);
+                zerofido_open_pin_input(app, ZfPinInputVaultRemoveCurrent, "Wrong vault PIN", 4);
+                return;
+            }
+#endif
         }
     }
 
@@ -1810,7 +1823,13 @@ static uint32_t zerofido_pin_menu_previous_callback(void *context) {
 }
 
 static uint32_t zerofido_pin_input_previous_callback(void *context) {
-    UNUSED(context);
+    ZerofidoApp *app = context;
+#if ZF_VAULT_PIN_KEK
+    if (app && app->pin_input_state == ZfPinInputVaultUnlock && app->storage &&
+        zf_vault_session_is_configured(app->storage) && !zf_vault_session_is_unlocked()) {
+        return VIEW_IGNORE;
+    }
+#endif
     return ZfViewPinMenu;
 }
 
