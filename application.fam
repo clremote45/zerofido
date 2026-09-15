@@ -109,7 +109,7 @@ App(
     name=app_name,
     apptype=FlipperAppType.EXTERNAL,
     entry_point="zerofido_main",
-    stack_size=4 * 1024,
+    stack_size=8 * 1024,
     sources=sources,
     cdefines=cdefines,
     requires=requires,
