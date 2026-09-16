@@ -389,9 +389,12 @@ static void zerofido_open_pin_confirm(ZerofidoApp *app) {
 
 #if ZF_VAULT_PIN_KEK
 static void zerofido_open_vault_pin_confirm(ZerofidoApp *app) {
+    /* zf_vault_key_destroy() erases the VMK: every vault-wrapped credential
+     * becomes undecryptable and there is no recovery path. Say so plainly --
+     * the old wording read like a reversible lockout. */
     zerofido_open_pin_confirm_dialog(app, ZfPinConfirmActionVaultRemove, ZfViewSettings,
                                      "Remove vault PIN?",
-                                     "Vault-locked passkeys will\nno longer be usable", "Remove");
+                                     "Vault passkeys become\npermanently unusable", "Erase");
 }
 #endif
 
