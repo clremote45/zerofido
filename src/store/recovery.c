@@ -19,6 +19,7 @@
 
 #include <string.h>
 
+#include "../zerofido_cbor.h"
 #include "../zerofido_crypto.h"
 #include "../zerofido_storage.h"
 #include "internal.h"
@@ -45,6 +46,50 @@ static bool zf_store_recovery_record_primary_is_valid(ZfStoreRecoveryCleanupCont
     return valid;
 }
 
+/*
+ * True when the record file is a single, complete CBOR map with integer keys
+ * that consumes the whole file. That is the shape every ZeroFIDO record is
+ * written in (v1 and v2 alike -- v2 simply carries extra keys), so a file
+ * that passes this but fails to decode is a record this build does not
+ * support rather than a damaged one. Real damage -- truncation, a partial
+ * write, bit rot -- does not survive the check, so genuinely corrupt records
+ * still self-heal from their backup.
+ */
+static bool zf_store_recovery_record_is_intact_container(ZfStoreRecoveryCleanupContext *context,
+                                                          const char *file_name) {
+    char record_path[128];
+    ZfCborCursor cursor;
+    size_t pairs = 0;
+    size_t size = 0;
+    bool intact = false;
+
+    if (!context || !context->buffer || context->buffer_size == 0U || !file_name) {
+        return false;
+    }
+    zf_store_build_record_path(file_name, record_path, sizeof(record_path));
+    if (!zf_storage_read_file(context->storage, record_path, context->buffer, context->buffer_size,
+                              &size)) {
+        goto cleanup;
+    }
+
+    zf_cbor_cursor_init(&cursor, context->buffer, size);
+    if (!zf_cbor_read_map_start(&cursor, &pairs)) {
+        goto cleanup;
+    }
+    for (size_t i = 0; i < pairs; ++i) {
+        uint64_t key = 0;
+
+        if (!zf_cbor_read_uint(&cursor, &key) || !zf_cbor_skip(&cursor)) {
+            goto cleanup;
+        }
+    }
+    intact = (cursor.ptr == cursor.end);
+
+cleanup:
+    zf_crypto_secure_zero(context->buffer, context->buffer_size);
+    return intact;
+}
+
 static bool zf_store_recovery_recover_record_backup(ZfStoreRecoveryCleanupContext *context,
                                                     const char *file_name,
                                                     const char *backup_path) {
@@ -54,9 +99,24 @@ static bool zf_store_recovery_recover_record_backup(ZfStoreRecoveryCleanupContex
                                      sizeof(record_path))) {
         return false;
     }
-    if (storage_file_exists(context->storage, record_path) &&
-        zf_store_recovery_record_primary_is_valid(context, file_name)) {
-        return zf_storage_remove_optional(context->storage, backup_path);
+    if (storage_file_exists(context->storage, record_path)) {
+        if (zf_store_recovery_record_primary_is_valid(context, file_name)) {
+            return zf_storage_remove_optional(context->storage, backup_path);
+        }
+        /*
+         * The primary is present but did not decode. Before treating that as
+         * corruption, check whether it is still structurally intact: a whole,
+         * well-formed CBOR record container that this build simply does not
+         * support (e.g. a v2 record written by a newer build, or a v1
+         * record whose codec this build lacks). The app data directory is
+         * shared by every ZeroFIDO build (appid is always "zerofido"), so
+         * promoting a stale backup over an intact-but-unsupported primary
+         * would silently destroy a credential that build can still read.
+         * The primary and its backup are both left untouched instead.
+         */
+        if (zf_store_recovery_record_is_intact_container(context, file_name)) {
+            return true;
+        }
     }
     if (!zf_storage_remove_optional(context->storage, record_path)) {
         return false;
@@ -118,7 +178,8 @@ static bool zf_store_recovery_cleanup_visitor(const char *name, const FileInfo *
 
 /*
  * Startup recovery is conservative: temp files are discarded, while backup
- * files are restored if the primary record is missing or cannot be decoded.
+ * files are restored if the primary record is missing or damaged. A primary
+ * that is intact but unsupported by this build is never replaced.
  */
 void zf_store_recovery_cleanup_temp_files_with_buffer(Storage *storage, uint8_t *buffer,
                                                       size_t buffer_size) {
