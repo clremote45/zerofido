@@ -56,11 +56,11 @@ jobs:
       - name: Check release build defaults
         run: uv run python -m unittest tests.app.test_application_manifest
 
-      - name: Point ufbt at Unleashed SDK (unlshd-093)
+      - name: Point ufbt at Unleashed SDK (release channel, currently unlshd-093)
         run: |
           uv run python -m ufbt update \
             --index-url=https://up.unleashedflip.com/directory.json \
-            --branch=unlshd-093
+            --channel=release
 
       - name: Build profile
         run: uv run python -m ufbt
