@@ -23,7 +23,7 @@ auto_accept_requests = env_flag("ZEROFIDO_AUTO_ACCEPT_REQUESTS", False)
 dev_screenshot = env_flag("ZEROFIDO_DEV_SCREENSHOT", False)
 dev_fido2_1 = env_flag("ZEROFIDO_DEV_FIDO2_1", False)
 packed_attestation = env_flag("ZEROFIDO_PACKED_ATTESTATION", True)
-vault_pin_kek = env_flag("ZEROFIDO_VAULT_PIN_KEK", False)
+vault_pin_kek = env_flag("ZEROFIDO_VAULT_PIN_KEK", True)
 
 cdefines = [
     f"ZF_RELEASE_DIAGNOSTICS={1 if release_diagnostics else 0}",
