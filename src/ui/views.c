@@ -1830,6 +1830,20 @@ static uint32_t zerofido_pin_input_previous_callback(void *context) {
         return VIEW_IGNORE;
     }
 #endif
+    if (app && app->pin_input_state == ZfPinInputRenameCredential) {
+        /* Rename is opened directly from the credential detail screen,
+         * bypassing the Settings -> PIN menu path that normally ensures
+         * ZfViewPinMenu is allocated and registered with the dispatcher.
+         * Falling through to the generic ZfViewPinMenu return below can
+         * therefore target a view that was never registered (or was freed
+         * by zerofido_ui_prune_rare_views after an earlier trip home),
+         * which crashes when the dispatcher switches to it. Go back to
+         * where rename was opened from instead, and clear the in-progress
+         * edit buffer the same way a confirmed rename does. */
+        zerofido_pin_reset_buffers(app);
+        app->pin_input_state = ZfPinInputNone;
+        return ZfViewCredentialDetail;
+    }
     return ZfViewPinMenu;
 }
 
