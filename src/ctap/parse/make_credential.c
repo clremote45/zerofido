@@ -308,7 +308,7 @@ uint8_t zf_ctap_parse_make_credential(const uint8_t *data, size_t size,
                                       ZfMakeCredentialRequest *request) {
     ZfCborCursor cursor;
     size_t pairs = 0;
-    uint16_t seen_keys = 0;
+    uint32_t seen_keys = 0;
     ZfCredentialDescriptorList exclude_list = request->exclude_list;
 
     memset(request, 0, sizeof(*request));

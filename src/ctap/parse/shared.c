@@ -54,12 +54,21 @@ ZfCtapTextKey zf_ctap_classify_text_key(const uint8_t *ptr, size_t size) {
     return ZfCtapTextKeyUnknown;
 }
 
-bool zf_ctap_mark_seen_key(uint16_t *seen_keys, uint64_t key) {
-    if (key >= 16) {
+/*
+ * Rejects a repeated map key. The mask used to be 16 bits and unconditionally
+ * returned "not seen yet" for key >= 16, so a host could repeat any high key as
+ * often as it liked and the strict duplicate check silently did not apply to it.
+ * 32 bits now covers key 0..31, which spans every key defined by
+ * makeCredential, getAssertion and authenticatorClientPIN. Keys >= 32 are not
+ * defined by any command parsed here and bind no request state, so they stay
+ * accepted and are skipped by the caller's switch.
+ */
+bool zf_ctap_mark_seen_key(uint32_t *seen_keys, uint64_t key) {
+    if (key >= 32) {
         return true;
     }
 
-    uint16_t mask = (uint16_t)(1U << key);
+    uint32_t mask = (uint32_t)(1UL << key);
     if ((*seen_keys & mask) != 0) {
         return false;
     }

@@ -69,7 +69,7 @@ uint8_t zf_ctap_parse_get_assertion(const uint8_t *data, size_t size,
                                     ZfGetAssertionRequest *request) {
     ZfCborCursor cursor;
     size_t pairs = 0;
-    uint16_t seen_keys = 0;
+    uint32_t seen_keys = 0;
     ZfCredentialDescriptorList allow_list = request->allow_list;
 
     memset(request, 0, sizeof(*request));

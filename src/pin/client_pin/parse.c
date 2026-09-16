@@ -46,7 +46,7 @@ static bool zf_client_pin_subcommand_requires_pin_protocol(uint64_t subcommand) 
 uint8_t zf_client_pin_parse_request(const uint8_t *data, size_t size, ZfClientPinRequest *request) {
     ZfCborCursor cursor;
     size_t pairs = 0;
-    uint16_t seen_keys = 0;
+    uint32_t seen_keys = 0;
 
     memset(request, 0, sizeof(*request));
     zf_cbor_cursor_init(&cursor, data, size);

@@ -47,7 +47,7 @@ typedef enum {
  */
 ZfCtapTextKey zf_ctap_classify_text_key(const uint8_t *ptr, size_t size);
 
-bool zf_ctap_mark_seen_key(uint16_t *seen_keys, uint64_t key);
+bool zf_ctap_mark_seen_key(uint32_t *seen_keys, uint64_t key);
 
 bool zf_ctap_cbor_read_text_copy(ZfCborCursor *cursor, char *out, size_t out_size);
 
