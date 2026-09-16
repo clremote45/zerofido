@@ -32,7 +32,7 @@ static uint8_t zf_hmac_secret_finish(ZfHmacSecretScratch *scratch, uint8_t statu
 uint8_t zf_ctap_hmac_secret_parse_get_assertion_input(ZfCborCursor *cursor,
                                                       ZfGetAssertionRequest *request) {
     size_t pairs = 0;
-    uint16_t seen_keys = 0;
+    uint32_t seen_keys = 0;
     bool saw_key_agreement = false;
     bool saw_salt_enc = false;
     bool saw_salt_auth = false;
