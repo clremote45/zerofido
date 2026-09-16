@@ -1,0 +1,91 @@
+name: Build full stock (Unleashed)
+
+on:
+  push:
+    branches:
+      - stock-unleashed
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-full-stock-unleashed-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build full (Unleashed)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      UV_PYTHON: "3.14"
+      ZEROFIDO_PROFILE: full
+      ZEROFIDO_RELEASE_DIAGNOSTICS: "0"
+      ZEROFIDO_USB_DIAGNOSTICS: "0"
+      ZEROFIDO_AUTO_ACCEPT_REQUESTS: "0"
+      ZEROFIDO_DEV_SCREENSHOT: "0"
+      ZEROFIDO_DEV_FIDO2_1: "0"
+      ZEROFIDO_PACKED_ATTESTATION: "1"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6.0.2
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8.1.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install Python
+        run: uv python install 3.14
+
+      - name: Sync tools
+        run: uv sync --locked
+
+      - name: Check release build defaults
+        run: uv run python -m unittest tests.app.test_application_manifest
+
+      - name: Point ufbt at Unleashed SDK (release channel, currently unlshd-093)
+        run: |
+          uv run python -m ufbt update \
+            --index-url=https://up.unleashedflip.com/directory.json \
+            --channel=release
+
+      - name: Show SDK target
+        run: uv run python -m ufbt status
+
+      - name: Build full profile
+        run: uv run python -m ufbt
+
+      - name: Verify NFC and USB are both in the build
+        run: |
+          set -eu
+          echo "--- symbol scan ---"
+          NFC=$(readelf -sW dist/zerofido.fap | grep -c -i 'nfc' || true)
+          USB=$(readelf -sW dist/zerofido.fap | grep -c -i 'usb' || true)
+          echo "nfc symbols: $NFC"
+          echo "usb symbols: $USB"
+          test "$NFC" -gt 0
+          test "$USB" -gt 0
+
+      - name: Package release FAP
+        run: >
+          uv run python host_tools/package_release.py
+          --skip-build
+          --allow-prebuilt-input
+          --fap dist/zerofido.fap
+          --output-fap dist/zerofido-full-stock-release.fap
+
+      - name: Report FAP size
+        run: |
+          ls -l dist/zerofido.fap dist/zerofido-full-stock-release.fap
+          stat -c '%n %s bytes' dist/zerofido-full-stock-release.fap
+
+      - name: Upload FAP artifact
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: zerofido-full-stock-release
+          if-no-files-found: error
+          path: dist/zerofido-full-stock-release.fap
