@@ -232,6 +232,16 @@ typedef struct {
     uint8_t hmac_secret_with_uv[ZF_HMAC_SECRET_LEN];
 } ZfCredentialRecord;
 
+/*
+ * Field order here is chosen to avoid compiler padding: all 4-byte
+ * fields are grouped together after the byte/array fields so no
+ * alignment gaps are inserted. This struct is the in-RAM credential
+ * index (up to ZF_MAX_CREDENTIALS live at once), so a few bytes saved
+ * per entry is a real, multiplied RAM saving on this target. Only
+ * plain field-by-field access and whole-struct memset/secure_zero are
+ * used on it (checked: no raw sizeof-based (de)serialization), so
+ * reordering fields is behavior-neutral.
+ */
 typedef struct {
     bool in_use;
     bool resident_key;
@@ -249,12 +259,15 @@ typedef struct {
 #else
     uint8_t credential_id_len;
     uint8_t rp_id_hash[32];
+    uint8_t cred_protect;
 #endif
     uint32_t sign_count;
     uint32_t counter_high_water;
     uint32_t created_at;
-    uint8_t cred_protect;
     uint32_t storage_version;
+#ifdef ZF_HOST_TEST
+    uint8_t cred_protect;
+#endif
 } ZfCredentialIndexEntry;
 
 typedef struct {
