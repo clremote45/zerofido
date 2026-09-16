@@ -1804,6 +1804,35 @@ static bool zerofido_settings_available(ZerofidoApp *app) {
     return !zf_app_lifecycle_startup_pending(app);
 }
 
+/*
+ * Back navigation does NOT go through zerofido_ui_switch_to_view: the view
+ * dispatcher takes whatever id a previous callback returns and looks it up with
+ * furi_check(view_pp != NULL), so returning a view that was never allocated this
+ * session -- or that zerofido_ui_prune_rare_views already freed -- is a hard
+ * crash rather than a soft failure. Every previous callback in this file must
+ * therefore hand its target to this helper, which re-creates and re-registers
+ * the view first and degrades to the always-registered status view if that
+ * fails. It also refreshes app->active_view, which the tick callback reads to
+ * decide what to redraw and whether pruning is allowed; without it, active_view
+ * stayed pinned to whatever screen was last entered through switch_to_view.
+ */
+static uint32_t zerofido_ui_previous_view(ZerofidoApp *app, ZfViewId view_id) {
+    if (!app) {
+        return VIEW_IGNORE;
+    }
+    if (!zerofido_ui_ensure_view(app, view_id)) {
+        view_id = ZfViewStatus;
+        if (!zerofido_ui_ensure_view(app, ZfViewStatus)) {
+            return VIEW_IGNORE;
+        }
+    }
+
+    furi_mutex_acquire(app->ui_mutex, FuriWaitForever);
+    app->active_view = view_id;
+    furi_mutex_release(app->ui_mutex);
+    return (uint32_t)view_id;
+}
+
 static uint32_t zerofido_ignore_previous_callback(void *context) {
     UNUSED(context);
     return VIEW_IGNORE;
@@ -1815,48 +1844,69 @@ static uint32_t zerofido_credentials_previous_callback(void *context) {
 }
 
 static uint32_t zerofido_settings_previous_callback(void *context) {
-    UNUSED(context);
-    return ZfViewStatus;
+    return zerofido_ui_previous_view(context, ZfViewStatus);
 }
 
 static uint32_t zerofido_credential_detail_previous_callback(void *context) {
-    UNUSED(context);
-    return ZfViewStatus;
+    return zerofido_ui_previous_view(context, ZfViewStatus);
 }
 
 static uint32_t zerofido_pin_menu_previous_callback(void *context) {
-    UNUSED(context);
-    return ZfViewSettings;
+    return zerofido_ui_previous_view(context, ZfViewSettings);
 }
 
 static uint32_t zerofido_pin_input_previous_callback(void *context) {
     ZerofidoApp *app = context;
+    ZfViewId target = ZfViewPinMenu;
+
+    if (!app) {
+        return VIEW_IGNORE;
+    }
 #if ZF_VAULT_PIN_KEK
-    if (app && app->pin_input_state == ZfPinInputVaultUnlock && app->storage &&
+    if (app->pin_input_state == ZfPinInputVaultUnlock && app->storage &&
         zf_vault_session_is_configured(app->storage) && !zf_vault_session_is_unlocked()) {
         return VIEW_IGNORE;
     }
 #endif
-    if (app && app->pin_input_state == ZfPinInputRenameCredential) {
-        /* Rename is opened directly from the credential detail screen,
-         * bypassing the Settings -> PIN menu path that normally ensures
-         * ZfViewPinMenu is allocated and registered with the dispatcher.
-         * Falling through to the generic ZfViewPinMenu return below can
-         * therefore target a view that was never registered (or was freed
-         * by zerofido_ui_prune_rare_views after an earlier trip home),
-         * which crashes when the dispatcher switches to it. Go back to
-         * where rename was opened from instead, and clear the in-progress
-         * edit buffer the same way a confirmed rename does. */
-        zerofido_pin_reset_buffers(app);
-        app->pin_input_state = ZfPinInputNone;
-        return ZfViewCredentialDetail;
+
+    switch (app->pin_input_state) {
+    case ZfPinInputRenameCredential:
+        /* Rename is opened straight from the credential detail screen. */
+        target = ZfViewCredentialDetail;
+        break;
+#if ZF_VAULT_PIN_KEK
+    case ZfPinInputVaultUnlock:
+    case ZfPinInputVaultSetNew:
+    case ZfPinInputVaultSetConfirm:
+    case ZfPinInputVaultChangeCurrent:
+    case ZfPinInputVaultChangeNew:
+    case ZfPinInputVaultChangeConfirm:
+    case ZfPinInputVaultRemoveCurrent:
+        /* Vault PIN flows are opened straight from the Settings submenu and
+         * never pass through the PIN menu, so ZfViewPinMenu may not exist. */
+        target = ZfViewSettings;
+        break;
+#endif
+    default:
+        /* CTAP ClientPIN flows are reached through the PIN menu. */
+        target = ZfViewPinMenu;
+        break;
     }
-    return ZfViewPinMenu;
+
+    /* Leaving a PIN screen abandons the entry: drop the half-typed secret and
+     * the in-progress state machine so the next entry starts clean. Detach the
+     * text input from pin_buffers->input first -- the view outlives the buffer
+     * and zerofido_open_pin_input rebinds it on the next entry. */
+    if (app->pin_input_view) {
+        text_input_reset(app->pin_input_view);
+    }
+    zerofido_pin_reset_buffers(app); /* also clears pin_input_state */
+    return zerofido_ui_previous_view(app, target);
 }
 
 static uint32_t zerofido_pin_confirm_previous_callback(void *context) {
     ZerofidoApp *app = context;
-    return app ? app->pin_confirm_return_view : ZfViewPinMenu;
+    return zerofido_ui_previous_view(app, app ? app->pin_confirm_return_view : ZfViewPinMenu);
 }
 
 #if ZF_RELEASE_DIAGNOSTICS
@@ -2207,6 +2257,16 @@ static void zerofido_ui_prune_rare_views(ZerofidoApp *app) {
 /*
  * Views are lazily allocated. Rare workflow views may be removed from the
  * dispatcher and freed after returning home, then recreated on next use.
+ *
+ * app->ui_registered_views and the view pointers are owned by the GUI thread
+ * alone and are intentionally not taken under ui_mutex. Every entry point that
+ * touches them -- ensure/register/unregister/free_rare/prune, the tick and
+ * custom-event callbacks, and zerofido_ui_show_interaction -- runs on the view
+ * dispatcher thread. The CTAP threads never call in directly: they post through
+ * zerofido_ui_dispatch_custom_event, which only runs the handler inline when the
+ * caller already IS the UI thread and otherwise hands the event to the
+ * dispatcher queue. ui_mutex still guards active_view and the approval state,
+ * which those threads do share.
  */
 bool zerofido_ui_ensure_view(ZerofidoApp *app, ZfViewId view_id) {
     if (!app || view_id >= ZfViewCount || !app->view_dispatcher) {
