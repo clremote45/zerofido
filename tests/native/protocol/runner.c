@@ -1391,13 +1391,6 @@ static void test_init_descriptor_list(ZfCredentialDescriptorList *list,
     test_init_descriptor_list(&(request).exclude_list, request##_exclude_descriptors,              \
                               ZF_MAX_ALLOW_LIST)
 
-static bool test_zf_store_add_record(Storage *storage, ZfCredentialStore *store,
-                                     const ZfCredentialRecord *record) {
-    uint8_t buffer[ZF_STORE_RECORD_IO_SIZE];
-
-    return zf_store_add_record_with_buffer(storage, store, record, buffer, sizeof(buffer));
-}
-
 static bool test_zf_store_init(Storage *storage, ZfCredentialStore *store) {
     uint8_t buffer[ZF_STORE_RECORD_IO_SIZE];
 
