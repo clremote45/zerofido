@@ -57,9 +57,6 @@ bool zf_store_wipe_app_data(Storage *storage);
 bool zf_store_prepare_credential(ZfCredentialRecord *record, const char *rp_id,
                                  const uint8_t *user_id, size_t user_id_len, const char *user_name,
                                  const char *user_display_name, bool resident_key);
-bool zf_store_add_record_with_buffer(Storage *storage, ZfCredentialStore *store,
-                                     const ZfCredentialRecord *record, uint8_t *buffer,
-                                     size_t buffer_size);
 bool zf_store_write_record_file_with_buffer(Storage *storage, const ZfCredentialRecord *record,
                                             uint8_t *buffer, size_t buffer_size);
 bool zf_store_remove_record_file(Storage *storage, const ZfCredentialRecord *record);
