@@ -7,6 +7,12 @@ on:
       - master
   pull_request:
   workflow_dispatch:
+    inputs:
+      release:
+        description: "Enforce the release gates and publish a release-packaged FAP"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -66,7 +72,29 @@ jobs:
       - name: Build profile
         run: uv run python -m ufbt
 
+      - name: Package release FAP
+        if: ${{ inputs.release }}
+        run: |
+          set -euo pipefail
+          uv run python host_tools/package_release.py \
+            --skip-build \
+            --allow-prebuilt-input \
+            --fap dist/zerofido.fap \
+            --output-fap dist/zerofido-${{ matrix.profile }}-pin-release.fap
+          uv run python host_tools/check_fap_icon.py \
+            --fap dist/zerofido-${{ matrix.profile }}-pin-release.fap
+          wc -c dist/zerofido-${{ matrix.profile }}-pin-release.fap
+
+      - name: Upload release FAP artifact
+        if: ${{ inputs.release }}
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: zerofido-${{ matrix.profile }}-pin-release
+          if-no-files-found: error
+          path: dist/zerofido-${{ matrix.profile }}-pin-release.fap
+
       - name: Package PIN FAP
+        if: ${{ !inputs.release }}
         run: |
           uv run python host_tools/package_release.py \
             --skip-build \
@@ -77,6 +105,7 @@ jobs:
           test -f dist/zerofido-${{ matrix.profile }}-pin.fap
 
       - name: Upload FAP artifacts
+        if: ${{ !inputs.release }}
         uses: actions/upload-artifact@v7.0.1
         with:
           name: zerofido-${{ matrix.profile }}-pin
