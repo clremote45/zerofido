@@ -54,12 +54,21 @@ static bool zf_store_recovery_recover_record_backup(ZfStoreRecoveryCleanupContex
                                      sizeof(record_path))) {
         return false;
     }
-    if (storage_file_exists(context->storage, record_path) &&
-        zf_store_recovery_record_primary_is_valid(context, file_name)) {
-        return zf_storage_remove_optional(context->storage, backup_path);
-    }
-    if (!zf_storage_remove_optional(context->storage, record_path)) {
-        return false;
+    /*
+     * A backup is only ever restored over a MISSING primary. If a primary
+     * record file is present but this build cannot decode it, that is not
+     * proof of corruption: the app data directory is shared by every
+     * ZeroFIDO build (appid is always "zerofido"), so the file may simply
+     * carry a record format version this build does not know about. Deleting
+     * it and promoting a stale backup would silently destroy a credential
+     * that a newer build can still read, so the unreadable primary and its
+     * backup are both left exactly as they are.
+     */
+    if (storage_file_exists(context->storage, record_path)) {
+        if (zf_store_recovery_record_primary_is_valid(context, file_name)) {
+            return zf_storage_remove_optional(context->storage, backup_path);
+        }
+        return true;
     }
     return storage_common_rename(context->storage, backup_path, record_path) == FSE_OK;
 }
@@ -118,7 +127,8 @@ static bool zf_store_recovery_cleanup_visitor(const char *name, const FileInfo *
 
 /*
  * Startup recovery is conservative: temp files are discarded, while backup
- * files are restored if the primary record is missing or cannot be decoded.
+ * files are restored only if the primary record file is missing. A primary
+ * that exists but does not decode is left alone, never replaced.
  */
 void zf_store_recovery_cleanup_temp_files_with_buffer(Storage *storage, uint8_t *buffer,
                                                       size_t buffer_size) {
