@@ -42,9 +42,11 @@ bool zf_store_record_format_load_record_for_display_with_buffer(Storage *storage
                                                                 uint8_t *buffer,
                                                                 size_t buffer_size);
 /*
- * Counter reservation updates only the small counter floor/high-water file.
- * It is intentionally narrower than a full record rewrite so response
- * publication can be fail-closed around monotonic counters.
+ * Counter reservation publishes the companion counter floor/high-water file
+ * first and then re-emits the record with the reserved sign_count, so a
+ * deleted .counter file cannot roll the counter back. Both writes are fail
+ * closed, which is what lets response publication stay fail-closed around
+ * monotonic counters.
  */
 bool zf_store_record_format_reserve_counter_with_buffer(Storage *storage,
                                                         const ZfCredentialRecord *record,
@@ -67,6 +69,13 @@ bool zf_store_record_format_write_record_with_buffer(Storage *storage,
  * name stay plaintext exactly as in v1 -- only the private key gains the
  * extra layer. A v2 record cannot be decoded without the VMK; there is no
  * display-only path that skips it.
+ *
+ * These explicit-VMK entry points exist for callers that already hold the key
+ * (CTAP signing, the vault index pass). Every other caller uses the ordinary
+ * non-_vault functions above: those dispatch on the record's own storage
+ * version and fall back to the unlocked vault session, so reads and writes of
+ * a v2 record work from any path without a parallel _vault twin per caller.
+ * A v1 record is never routed through the vault path -- v1 stays v1.
  */
 bool zf_store_record_format_encode_vault(const ZfCredentialRecord *record,
                                          const uint8_t vmk[ZF_VAULT_KEY_LEN], uint8_t *out,

@@ -30,6 +30,7 @@
 #include "record_format_internal.h"
 #if ZF_VAULT_PIN_KEK
 #include "../vault/zf_vault_key.h"
+#include "../vault/zf_vault_session.h"
 #endif
 
 /*
@@ -344,6 +345,14 @@ static bool zf_record_unwrap_hmac_secret(ZfCredentialRecord *record,
     return ok;
 }
 
+/*
+ * The record rewrite below is deliberate, not redundant: the companion
+ * .counter file is the normal high-water authority, but re-emitting the
+ * record with the reserved sign_count keeps the embedded floor from letting a
+ * deleted .counter file roll the counter back. It writes through
+ * zf_store_record_format_write_record_with_buffer, which dispatches on
+ * record->storage_version, so a v2 record is re-emitted as v2.
+ */
 bool zf_store_record_format_reserve_counter_with_buffer(Storage *storage,
                                                         const ZfCredentialRecord *record,
                                                         uint8_t *buffer, size_t buffer_size,
@@ -795,10 +804,27 @@ static bool zf_record_decode_impl(const uint8_t *data, size_t data_size, const c
         }
 #if ZF_VAULT_PIN_KEK
     } else if (version == ZF_STORE_VAULT_VERSION) {
-        if (!saw_private_vmk_iv || !vmk) {
-            goto cleanup;
+        /*
+         * Version dispatch lives here, once, instead of in every caller.
+         * Callers that already hold the VMK pass it in; everyone else
+         * (display loads, resident-credential matchers, index scans) falls
+         * back to the unlocked vault session, so a v2 record decodes from
+         * every path exactly when the vault is unlocked. A locked vault still
+         * fails closed -- there is no VMK-less decode of a v2 record.
+         */
+        uint8_t session_vmk[ZF_VAULT_KEY_LEN] = {0};
+        const uint8_t *effective_vmk = vmk;
+        bool unwrapped = false;
+
+        if (!effective_vmk && zf_vault_session_copy_key(session_vmk)) {
+            effective_vmk = session_vmk;
         }
-        if (!zf_record_vault_unwrap_private(vmk, out_record->private_wrapped, private_vmk_iv)) {
+        if (saw_private_vmk_iv && effective_vmk) {
+            unwrapped = zf_record_vault_unwrap_private(effective_vmk, out_record->private_wrapped,
+                                                       private_vmk_iv);
+        }
+        zf_crypto_secure_zero(session_vmk, sizeof(session_vmk));
+        if (!unwrapped) {
             goto cleanup;
         }
 #endif
@@ -965,6 +991,28 @@ bool zf_store_record_format_write_record_with_buffer(Storage *storage,
         }
         return false;
     }
+#if ZF_VAULT_PIN_KEK
+    /*
+     * Version dispatch, never migration. A record that is already v2 must not
+     * be re-emitted through the v1 encoder: that silently strips the VMK layer
+     * and leaves a loadable, enclave-only record behind (what counter
+     * reservation did on every assertion). If the vault is locked we fail
+     * rather than downgrade. v1 records skip this entirely and stay v1.
+     */
+    if (record->storage_version == ZF_STORE_VAULT_VERSION) {
+        uint8_t session_vmk[ZF_VAULT_KEY_LEN] = {0};
+        bool vault_ok = false;
+
+        if (zf_vault_session_copy_key(session_vmk)) {
+            vault_ok = zf_store_record_format_write_record_with_buffer_vault(
+                storage, record, session_vmk, buffer, buffer_size);
+        } else {
+            zf_crypto_secure_zero(buffer, buffer_size);
+        }
+        zf_crypto_secure_zero(session_vmk, sizeof(session_vmk));
+        return vault_ok;
+    }
+#endif
     if (buffer_size < ZF_STORE_RECORD_MAX_SIZE) {
         goto cleanup;
     }
