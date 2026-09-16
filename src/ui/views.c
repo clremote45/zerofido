@@ -1560,6 +1560,13 @@ static bool zerofido_delete_selected_credential(ZerofidoApp *app, const char **f
 
     const ZfCredentialIndexEntry *record = &app->store.records[app->credentials_selected_index];
     credential_id_len = record->credential_id_len;
+    if (credential_id_len > sizeof(credential_id_bytes)) {
+        furi_mutex_release(app->ui_mutex);
+        if (failure_status) {
+            *failure_status = "No passkey selected";
+        }
+        return false;
+    }
     memcpy(credential_id_bytes, record->credential_id, credential_id_len);
     if (app->maintenance_busy) {
         furi_mutex_release(app->ui_mutex);

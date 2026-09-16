@@ -195,6 +195,8 @@ ZfVaultKeyLoadStatus zf_vault_key_unlock(Storage *storage, const char *pin, size
     }
     if (read_size != sizeof(record) || record.magic != ZF_VAULT_KEY_FILE_MAGIC ||
         record.version != ZF_VAULT_KEY_FILE_VERSION || record.kdf_iterations == 0U) {
+        /* Only wrapped material, but keep the single-exit zeroing discipline. */
+        zf_crypto_secure_zero(&record, sizeof(record));
         return ZfVaultKeyLoadInvalid;
     }
 
