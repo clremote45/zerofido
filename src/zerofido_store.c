@@ -275,41 +275,6 @@ bool zf_store_prepare_credential(ZfCredentialRecord *record, const char *rp_id,
     return true;
 }
 
-/*
- * Write-before-publish protects the live index from pointing at a missing or
- * partially written credential file.
- */
-bool zf_store_add_record_with_buffer(Storage *storage, ZfCredentialStore *store,
-                                     const ZfCredentialRecord *record, uint8_t *buffer,
-                                     size_t buffer_size) {
-    ZfCredentialRecord record_to_index;
-
-    if (!store || !record || !buffer || buffer_size < ZF_STORE_RECORD_IO_SIZE ||
-        store->count >= ZF_MAX_CREDENTIALS) {
-        return false;
-    }
-    if (!zf_store_ensure_capacity(store, store->count + 1U)) {
-        return false;
-    }
-    if (!zf_store_record_format_write_record_with_buffer(storage, record, buffer, buffer_size)) {
-        return false;
-    }
-
-    /*
-     * record->storage_version only means something once a record has been
-     * decoded from disk -- a freshly built record (as here) never had it
-     * set. This path always writes format version 1, so the index entry
-     * must say so explicitly rather than trusting whatever the caller left
-     * in that field.
-     */
-    record_to_index = *record;
-    record_to_index.storage_version = ZF_STORE_FORMAT_VERSION;
-    zf_store_index_entry_from_record(&record_to_index, &store->records[store->count]);
-    zf_crypto_secure_zero(&record_to_index, sizeof(record_to_index));
-    store->count++;
-    return true;
-}
-
 bool zf_store_write_record_file_with_buffer(Storage *storage, const ZfCredentialRecord *record,
                                             uint8_t *buffer, size_t buffer_size) {
     return zf_store_record_format_write_record_with_buffer(storage, record, buffer, buffer_size);
@@ -955,8 +920,8 @@ bool zf_store_add_record_with_buffer_vault(Storage *storage, ZfCredentialStore *
         return false;
     }
 
-    /* Same reasoning as zf_store_add_record_with_buffer: this path always
-     * writes format version 2, so say so explicitly in the index entry. */
+    /* Vault records always write format version 2, so say so explicitly
+     * in the index entry rather than trusting the caller's field. */
     record_to_index = *record;
     record_to_index.storage_version = ZF_STORE_VAULT_VERSION;
     zf_store_index_entry_from_record(&record_to_index, &store->records[store->count]);
