@@ -66,19 +66,19 @@ jobs:
       - name: Build profile
         run: uv run python -m ufbt
 
-      - name: Package dev FAP
+      - name: Package PIN FAP
         run: |
           uv run python host_tools/package_release.py \
             --skip-build \
             --allow-prebuilt-input \
             --fap dist/zerofido.fap \
-            --output-fap dist/zerofido-${{ matrix.profile }}-dev.fap \
+            --output-fap dist/zerofido-${{ matrix.profile }}-pin.fap \
             || echo "::warning::release payload gate failed - expected for a dev build"
-          test -f dist/zerofido-${{ matrix.profile }}-dev.fap
+          test -f dist/zerofido-${{ matrix.profile }}-pin.fap
 
       - name: Upload FAP artifacts
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: zerofido-${{ matrix.profile }}-dev
+          name: zerofido-${{ matrix.profile }}-pin
           if-no-files-found: error
-          path: dist/zerofido-${{ matrix.profile }}-dev.fap
+          path: dist/zerofido-${{ matrix.profile }}-pin.fap
