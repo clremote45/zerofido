@@ -1868,16 +1868,15 @@ static uint32_t zerofido_pin_input_previous_callback(void *context) {
 #if ZF_VAULT_PIN_KEK
     if (app->pin_input_state == ZfPinInputVaultUnlock && app->storage &&
         zf_vault_session_is_configured(app->storage) && !zf_vault_session_is_unlocked()) {
-        /* The initial vault prompt has no safe previous view: transport is
-         * deliberately stopped and credential access must remain locked.
-         * Treat Back as an app exit, using the normal shutdown path, instead
-         * of trapping the user on the PIN screen. Wipe the partial PIN first. */
+        /* The initial vault prompt has no safe previous view. Wipe the partial
+         * PIN, then return VIEW_NONE so ViewDispatcher invokes the registered
+         * navigation callback after this view callback returns. Calling the
+         * shutdown callback directly here would stop the dispatcher reentrantly. */
         if (app->pin_input_view) {
             text_input_reset(app->pin_input_view);
         }
         zerofido_pin_reset_buffers(app);
-        zerofido_navigation_callback(app);
-        return VIEW_IGNORE;
+        return VIEW_NONE;
     }
 #endif
 
