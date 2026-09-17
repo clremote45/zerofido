@@ -1868,15 +1868,11 @@ static uint32_t zerofido_pin_input_previous_callback(void *context) {
 #if ZF_VAULT_PIN_KEK
     if (app->pin_input_state == ZfPinInputVaultUnlock && app->storage &&
         zf_vault_session_is_configured(app->storage) && !zf_vault_session_is_unlocked()) {
-        /* The initial vault prompt has no safe previous view. Wipe the partial
-         * PIN, then return VIEW_NONE so ViewDispatcher invokes the registered
-         * navigation callback after this view callback returns. Calling the
-         * shutdown callback directly here would stop the dispatcher reentrantly. */
-        if (app->pin_input_view) {
-            text_input_reset(app->pin_input_view);
-        }
-        zerofido_pin_reset_buffers(app);
-        return VIEW_NONE;
+        /* The initial vault prompt has no previous view. VIEW_IGNORE delegates
+         * Back to the dispatcher navigation callback while keeping the viewport
+         * alive long enough to drain the button-release event. Normal teardown
+         * removes the view before wiping its PIN buffer. */
+        return VIEW_IGNORE;
     }
 #endif
 
@@ -2120,7 +2116,6 @@ static bool zerofido_navigation_callback(void *context) {
     app->ui_events_enabled = false;
     dispatcher = app->view_dispatcher;
     furi_mutex_release(app->ui_mutex);
-    zf_transport_stop(app);
     if (dispatcher) {
         view_dispatcher_stop(dispatcher);
     }
@@ -2450,9 +2445,6 @@ void zerofido_ui_deinit(ZerofidoApp *app) {
         app->dev_screenshot_framebuffer_registered = false;
     }
 #endif
-    zf_app_ui_scratch_release(app);
-    zerofido_pin_reset_buffers(app);
-
     if (app->view_dispatcher) {
         for (ZfViewId view_id = ZfViewStatus; view_id < ZfViewCount; ++view_id) {
             if ((app->ui_registered_views & (1U << view_id)) != 0U) {
@@ -2461,6 +2453,10 @@ void zerofido_ui_deinit(ZerofidoApp *app) {
         }
         app->ui_registered_views = 0;
     }
+
+    /* Detach every active view before releasing memory referenced by its model. */
+    zf_app_ui_scratch_release(app);
+    zerofido_pin_reset_buffers(app);
 
     if (app->approval_view) {
         dialog_ex_free(app->approval_view);
